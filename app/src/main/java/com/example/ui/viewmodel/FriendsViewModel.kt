@@ -2,9 +2,11 @@ package com.example.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.util.Log
 import com.example.data.model.FriendRequestEntity
 import com.example.data.model.StudySessionEntity
 import com.example.data.model.UserEntity
+import com.example.data.remote.OnlineUser
 import com.example.data.repository.AppRepository
 import com.example.data.util.StatsCalculator
 import com.example.data.util.UserStudyStats
@@ -26,7 +28,7 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
     private val currentUserId: String?
         get() = currentUser.value?.userId
 
-    // Accepted Friends list
+    // Accepted Friends List
     val friendsList: StateFlow<List<UserEntity>> = currentUser
         .flatMapLatest { user ->
             if (user != null) repository.getAcceptedFriendsFlow(user.userId)
@@ -51,6 +53,15 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
 
     private val _searchMessage = MutableStateFlow<String?>(null)
     val searchMessage: StateFlow<String?> = _searchMessage.asStateFlow()
+
+    private val _isSearching = MutableStateFlow(false)
+    val isSearching: StateFlow<Boolean> = _isSearching.asStateFlow()
+
+    private val _isOnlineSyncing = MutableStateFlow(false)
+    val isOnlineSyncing: StateFlow<Boolean> = _isOnlineSyncing.asStateFlow()
+
+    private val _onlineCommunityUsers = MutableStateFlow<List<OnlineUser>>(emptyList())
+    val onlineCommunityUsers: StateFlow<List<OnlineUser>> = _onlineCommunityUsers.asStateFlow()
 
     private val _uiToast = MutableStateFlow<String?>(null)
     val uiToast: StateFlow<String?> = _uiToast.asStateFlow()
@@ -111,6 +122,32 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
                 _activityFeed.value = activities
             }
         }
+
+        // Trigger initial online sync and community directory loading
+        viewModelScope.launch {
+            currentUser.filterNotNull().collect {
+                syncOnline()
+            }
+        }
+    }
+
+    fun syncOnline() {
+        viewModelScope.launch {
+            _isOnlineSyncing.value = true
+            try {
+                repository.syncCurrentUserOnline()
+                val newReqs = repository.syncOnlineRequestsForCurrentUser()
+                if (newReqs > 0) {
+                    _uiToast.value = "Received $newReqs new online friend request(s)! 👥"
+                }
+                val onlineUsers = repository.fetchOnlineCommunityUsers()
+                _onlineCommunityUsers.value = onlineUsers
+            } catch (e: Exception) {
+                Log.e("FriendsViewModel", "Error in syncOnline", e)
+            } finally {
+                _isOnlineSyncing.value = false
+            }
+        }
     }
 
     fun onSearchQueryChanged(query: String) {
@@ -122,23 +159,32 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
     }
 
     fun performSearchByStudyId() {
-        val query = _searchQuery.value.trim().uppercase()
+        val query = _searchQuery.value.trim().uppercase().replace(" ", "-").removePrefix("#").removePrefix("@")
         if (query.isBlank()) {
-            _searchMessage.value = "Please enter a Study ID (e.g. STU-7K92P4)."
+            _searchMessage.value = "Please enter a Study ID (e.g. STU-7K92P4 or FVBW7A)."
             return
         }
 
         viewModelScope.launch {
-            val foundUser = repository.searchUserByStudyId(query)
-            if (foundUser == null) {
-                _searchResultUser.value = null
-                _searchMessage.value = "Study ID '$query' not found."
-            } else if (foundUser.userId == currentUserId) {
-                _searchResultUser.value = foundUser
-                _searchMessage.value = "This is your own Study ID!"
-            } else {
-                _searchResultUser.value = foundUser
-                _searchMessage.value = null
+            _isSearching.value = true
+            _searchMessage.value = null
+            _searchResultUser.value = null
+            try {
+                val foundUser = repository.searchUserByStudyId(query)
+                if (foundUser == null) {
+                    _searchResultUser.value = null
+                    _searchMessage.value = "Study ID '$query' not found online or in local directory. Please check spelling or invite your friend to share their Study ID."
+                } else if (foundUser.userId == currentUserId || foundUser.studyId.equals(currentUser.value?.studyId, ignoreCase = true)) {
+                    _searchResultUser.value = foundUser
+                    _searchMessage.value = "This is your own Study ID!"
+                } else {
+                    _searchResultUser.value = foundUser
+                    _searchMessage.value = null
+                }
+            } catch (e: Exception) {
+                _searchMessage.value = "Search error: ${e.localizedMessage}"
+            } finally {
+                _isSearching.value = false
             }
         }
     }

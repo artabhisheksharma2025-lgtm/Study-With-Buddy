@@ -2,6 +2,10 @@ package com.example.data.repository
 
 import com.example.data.local.AppDatabase
 import com.example.data.model.*
+import com.example.data.remote.OnlineSyncService
+import com.example.data.remote.OnlineUser
+import com.example.data.util.StatsCalculator
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.withContext
@@ -382,6 +386,18 @@ class AppRepository(private val db: AppDatabase) {
             )
         )
 
+        // Sync updated hours and streak to online community in background
+        try {
+            val user = userDao.getUserById(userId)
+            if (user != null) {
+                val allSessions = studySessionDao.getSessionsForUser(userId)
+                val stats = StatsCalculator.calculateStats(allSessions)
+                OnlineSyncService.syncUserOnline(user, stats)
+            }
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed background online sync on session complete", e)
+        }
+
         session
     }
 
@@ -407,7 +423,59 @@ class AppRepository(private val db: AppDatabase) {
 
     // --- Friends & Social ---
     suspend fun searchUserByStudyId(studyId: String): UserEntity? = withContext(Dispatchers.IO) {
-        userDao.getUserByStudyId(studyId.trim().uppercase())
+        var clean = studyId.trim().uppercase().replace(" ", "-").removePrefix("#").removePrefix("@")
+        // Try local lookup
+        var local = userDao.getUserByStudyId(clean)
+        if (local == null && !clean.startsWith("STU-")) {
+            clean = "STU-$clean"
+            local = userDao.getUserByStudyId(clean)
+        }
+        if (local != null) return@withContext local
+
+        // Not found locally? Search live Cloud Database (Online Sync)
+        try {
+            val onlineUser = OnlineSyncService.searchUserOnline(clean)
+            if (onlineUser != null) {
+                val existing = userDao.getUserById(onlineUser.userId) ?: userDao.getUserByStudyId(onlineUser.studyId)
+                val targetUser = existing ?: UserEntity(
+                    userId = onlineUser.userId,
+                    fullName = onlineUser.fullName,
+                    username = onlineUser.username,
+                    email = "${onlineUser.username}@student.community",
+                    passwordHash = "cloud_user",
+                    studyId = onlineUser.studyId,
+                    privacyVisibility = onlineUser.privacyVisibility,
+                    joinedDate = System.currentTimeMillis() - 86400000L * 7,
+                    isLoggedIn = false
+                )
+                userDao.insertUser(targetUser)
+
+                // If they have study stats online, seed sample session locally so streak and hours appear
+                if (onlineUser.totalStudySeconds > 0) {
+                    val sessions = studySessionDao.getSessionsForUser(targetUser.userId)
+                    if (sessions.isEmpty()) {
+                        studySessionDao.insertSession(
+                            StudySessionEntity(
+                                sessionId = "sess_online_${targetUser.userId}",
+                                userId = targetUser.userId,
+                                subjectId = "sub_online_${targetUser.userId}",
+                                subjectName = "General Study",
+                                startTime = System.currentTimeMillis() - onlineUser.totalStudySeconds * 1000L,
+                                endTime = System.currentTimeMillis(),
+                                durationSeconds = onlineUser.totalStudySeconds,
+                                sessionDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
+                                title = "Online Study Session"
+                            )
+                        )
+                    }
+                }
+                return@withContext targetUser
+            }
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Error during online search", e)
+        }
+
+        null
     }
 
     fun getPendingReceivedRequests(userId: String): Flow<List<FriendRequestEntity>> =
@@ -415,8 +483,18 @@ class AppRepository(private val db: AppDatabase) {
 
     suspend fun sendFriendRequest(senderId: String, targetStudyId: String): Result<String> =
         withContext(Dispatchers.IO) {
-            val targetUser = userDao.getUserByStudyId(targetStudyId.trim().uppercase())
-                ?: return@withContext Result.failure(Exception("Study ID not found."))
+            val cleanTargetId = targetStudyId.trim().uppercase().replace(" ", "-").removePrefix("#").removePrefix("@")
+            var targetUser = userDao.getUserByStudyId(cleanTargetId)
+            if (targetUser == null && !cleanTargetId.startsWith("STU-")) {
+                targetUser = userDao.getUserByStudyId("STU-$cleanTargetId")
+            }
+            if (targetUser == null) {
+                // Try searching online if not yet cached locally
+                targetUser = searchUserByStudyId(cleanTargetId)
+            }
+            if (targetUser == null) {
+                return@withContext Result.failure(Exception("Study ID '$cleanTargetId' not found locally or online."))
+            }
 
             if (targetUser.userId == senderId) {
                 return@withContext Result.failure(Exception("You cannot send a friend request to yourself."))
@@ -453,7 +531,16 @@ class AppRepository(private val db: AppDatabase) {
                 )
             )
 
-            Result.success("Friend request sent to ${targetUser.fullName}!")
+            // Propagate request online so other device receives it
+            if (sender != null) {
+                try {
+                    OnlineSyncService.sendOnlineFriendRequest(sender, targetUser.studyId)
+                } catch (e: Exception) {
+                    Log.e("AppRepository", "Failed to propagate online friend request", e)
+                }
+            }
+
+            Result.success("Friend request sent to ${targetUser.fullName} (Online)!")
         }
 
     suspend fun acceptFriendRequest(request: FriendRequestEntity) = withContext(Dispatchers.IO) {
@@ -471,6 +558,7 @@ class AppRepository(private val db: AppDatabase) {
 
         val receiver = userDao.getUserById(request.receiverId)
         val receiverName = receiver?.fullName ?: "Your friend"
+        val sender = userDao.getUserById(request.senderId)
 
         notificationDao.insertNotification(
             AppNotificationEntity(
@@ -480,11 +568,96 @@ class AppRepository(private val db: AppDatabase) {
                 message = "$receiverName accepted your friend request!"
             )
         )
+
+        // Update online status
+        if (receiver != null && sender != null) {
+            try {
+                OnlineSyncService.updateOnlineRequestStatus(receiver.studyId, sender.studyId, "ACCEPTED")
+            } catch (e: Exception) {
+                Log.e("AppRepository", "Error updating online request status", e)
+            }
+        }
     }
 
     suspend fun rejectFriendRequest(request: FriendRequestEntity) = withContext(Dispatchers.IO) {
         val updatedReq = request.copy(status = "REJECTED", updatedAt = System.currentTimeMillis())
         friendDao.updateFriendRequest(updatedReq)
+
+        val receiver = userDao.getUserById(request.receiverId)
+        val sender = userDao.getUserById(request.senderId)
+        if (receiver != null && sender != null) {
+            try {
+                OnlineSyncService.updateOnlineRequestStatus(receiver.studyId, sender.studyId, "REJECTED")
+            } catch (e: Exception) {
+                Log.e("AppRepository", "Error updating online request rejection", e)
+            }
+        }
+    }
+
+    suspend fun syncOnlineRequestsForCurrentUser(): Int = withContext(Dispatchers.IO) {
+        val user = userDao.getLoggedInUser() ?: return@withContext 0
+        try {
+            // First sync current user online so others can find this user
+            syncCurrentUserOnline()
+
+            val onlineRequests = OnlineSyncService.fetchIncomingOnlineRequests(user.studyId)
+            var newCount = 0
+            for (req in onlineRequests) {
+                var sender = userDao.getUserByStudyId(req.senderStudyId)
+                if (sender == null) {
+                    sender = searchUserByStudyId(req.senderStudyId)
+                }
+                if (sender != null && sender.userId != user.userId) {
+                    val existing = friendDao.getFriendRequestBetween(sender.userId, user.userId)
+                    val existingFriendship = friendDao.getFriendshipBetween(sender.userId, user.userId)
+                    if (existing == null && existingFriendship == null) {
+                        friendDao.insertFriendRequest(
+                            FriendRequestEntity(
+                                requestId = req.requestId,
+                                senderId = sender.userId,
+                                receiverId = user.userId,
+                                status = "PENDING",
+                                createdAt = req.timestamp
+                            )
+                        )
+                        notificationDao.insertNotification(
+                            AppNotificationEntity(
+                                notificationId = "notif_online_" + req.requestId,
+                                userId = user.userId,
+                                title = "New Online Friend Request 🌐",
+                                message = "${sender.fullName} (@${sender.username}) sent you a study friend request!"
+                            )
+                        )
+                        newCount++
+                    }
+                }
+            }
+            newCount
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Error syncing online requests", e)
+            0
+        }
+    }
+
+    suspend fun syncCurrentUserOnline(): Boolean = withContext(Dispatchers.IO) {
+        val user = userDao.getLoggedInUser() ?: return@withContext false
+        try {
+            val sessions = studySessionDao.getSessionsForUser(user.userId)
+            val stats = StatsCalculator.calculateStats(sessions)
+            OnlineSyncService.syncUserOnline(user, stats)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync user profile online", e)
+            false
+        }
+    }
+
+    suspend fun fetchOnlineCommunityUsers(): List<OnlineUser> = withContext(Dispatchers.IO) {
+        try {
+            OnlineSyncService.fetchAllOnlineUsers()
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to fetch online community users", e)
+            emptyList()
+        }
     }
 
     fun getAcceptedFriendsFlow(userId: String): Flow<List<UserEntity>> {

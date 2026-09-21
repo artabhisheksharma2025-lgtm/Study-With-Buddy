@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -7,8 +11,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -25,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.UserEntity
+import com.example.data.remote.OnlineUser
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
 import com.example.ui.components.QRScannerDialog
@@ -60,6 +67,9 @@ fun FriendsScreen(
     val searchQuery by friendsViewModel.searchQuery.collectAsState()
     val searchResultUser by friendsViewModel.searchResultUser.collectAsState()
     val searchMessage by friendsViewModel.searchMessage.collectAsState()
+    val isSearching by friendsViewModel.isSearching.collectAsState()
+    val isOnlineSyncing by friendsViewModel.isOnlineSyncing.collectAsState()
+    val onlineUsers by friendsViewModel.onlineCommunityUsers.collectAsState()
     val uiToast by friendsViewModel.uiToast.collectAsState()
 
     val selectedFriend by friendsViewModel.selectedFriend.collectAsState()
@@ -81,6 +91,26 @@ fun FriendsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("👥 Friends & Study Community", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(
+                        onClick = { friendsViewModel.syncOnline() },
+                        modifier = Modifier.testTag("button_sync_online")
+                    ) {
+                        if (isOnlineSyncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Filled.Sync,
+                                contentDescription = "Sync Online Cloud",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
@@ -133,13 +163,22 @@ fun FriendsScreen(
                     }
                     FriendsSubTab.ADD_FRIEND -> {
                         AddFriendContent(
+                            currentUser = currentUser,
                             searchQuery = searchQuery,
                             searchResultUser = searchResultUser,
                             searchMessage = searchMessage,
+                            isSearching = isSearching,
+                            isOnlineSyncing = isOnlineSyncing,
+                            onlineUsers = onlineUsers,
                             onQueryChanged = { friendsViewModel.onSearchQueryChanged(it) },
                             onSearch = { friendsViewModel.performSearchByStudyId() },
                             onOpenQRScanner = { showQRScanner = true },
-                            onSendRequest = { studyId -> friendsViewModel.sendFriendRequest(studyId) }
+                            onSendRequest = { studyId -> friendsViewModel.sendFriendRequest(studyId) },
+                            onSyncOnline = { friendsViewModel.syncOnline() },
+                            onSelectOnlineUser = { studyId ->
+                                friendsViewModel.onSearchQueryChanged(studyId)
+                                friendsViewModel.performSearchByStudyId()
+                            }
                         )
                     }
                     FriendsSubTab.REQUESTS -> {
@@ -432,88 +471,276 @@ private fun MyFriendsListContent(
 
 @Composable
 private fun AddFriendContent(
+    currentUser: UserEntity?,
     searchQuery: String,
     searchResultUser: UserEntity?,
     searchMessage: String?,
+    isSearching: Boolean,
+    isOnlineSyncing: Boolean,
+    onlineUsers: List<OnlineUser>,
     onQueryChanged: (String) -> Unit,
     onSearch: () -> Unit,
     onOpenQRScanner: () -> Unit,
-    onSendRequest: (String) -> Unit
+    onSendRequest: (String) -> Unit,
+    onSyncOnline: () -> Unit,
+    onSelectOnlineUser: (String) -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(vertical = 8.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(
-            text = "Enter Friend's Study ID",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+        // Online Community Live Cloud Banner
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = EmeraldAccent.copy(alpha = 0.12f)
+            ),
+            border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldAccent.copy(alpha = 0.35f)),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onQueryChanged,
-                placeholder = { Text("e.g. STU-7K92P4") },
-                singleLine = true,
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("friend_search_input"),
-                shape = RoundedCornerShape(14.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(
-                onClick = onSearch,
-                modifier = Modifier
-                    .height(54.dp)
-                    .testTag("search_friend_button"),
-                shape = RoundedCornerShape(14.dp)
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Filled.Search, contentDescription = "Search")
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(EmeraldAccent.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("🌐", fontSize = 18.sp)
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Online Community Sync",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = EmeraldAccent
+                        ) {
+                            Text(
+                                text = "LIVE",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Global directory active. Search any friend by Study ID across devices.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(
+                    onClick = onSyncOnline,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    if (isOnlineSyncing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            contentDescription = "Refresh Online",
+                            tint = EmeraldAccent
+                        )
+                    }
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        // My Study ID Card (Easy Copy & Share)
+        if (currentUser != null) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Your Study ID",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = currentUser.studyId,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(
+                                onClick = {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    val clip = ClipData.newPlainText("Study ID", currentUser.studyId)
+                                    clipboard.setPrimaryClip(clip)
+                                    Toast.makeText(context, "Copied ID: ${currentUser.studyId}", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Copy", style = MaterialTheme.typography.labelMedium)
+                            }
 
-        OutlinedButton(
-            onClick = onOpenQRScanner,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("scan_qr_button"),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Scan QR Code")
+                            FilledTonalButton(
+                                onClick = {
+                                    val sendIntent = Intent().apply {
+                                        action = Intent.ACTION_SEND
+                                        putExtra(
+                                            Intent.EXTRA_TEXT,
+                                            "Add me on Study Tracker! My Study ID is ${currentUser.studyId}. Let's study together!"
+                                        )
+                                        type = "text/plain"
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "Share Study ID"))
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Share", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        // Search Input Field
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Add Friend by Study ID",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Enter full code (e.g. STU-FVBW7A, STU-7K92P4) or letters without prefix.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = onQueryChanged,
+                        placeholder = { Text("e.g. STU-FVBW7A") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("friend_search_input"),
+                        shape = RoundedCornerShape(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(
+                        onClick = onSearch,
+                        enabled = !isSearching && searchQuery.isNotBlank(),
+                        modifier = Modifier
+                            .height(54.dp)
+                            .testTag("search_friend_button"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        if (isSearching) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Icon(Icons.Filled.Search, contentDescription = "Search")
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = onOpenQRScanner,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("scan_qr_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Scan Friend's QR Code")
+                }
+            }
+        }
+
+        // Feedback / Result message
         searchMessage?.let { msg ->
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
+                color = if (msg.contains("not found", ignoreCase = true)) {
+                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = msg,
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (msg.contains("not found", ignoreCase = true)) Icons.Filled.Info else Icons.Filled.CheckCircle,
+                        contentDescription = null,
+                        tint = if (msg.contains("not found", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = msg,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
 
+        // Search Result Card
         searchResultUser?.let { target ->
-            Spacer(modifier = Modifier.height(16.dp))
+            val isMyself = target.userId == currentUser?.userId || target.studyId.equals(currentUser?.studyId, ignoreCase = true)
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -534,30 +761,138 @@ private fun AddFriendContent(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = target.fullName,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = target.fullName,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = EmeraldAccent.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "🌐 Online Student",
+                                color = EmeraldAccent,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
                     Text(
                         text = "@${target.username} • Study ID: ${target.studyId}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Button(
-                        onClick = { onSendRequest(target.studyId) },
+                    Spacer(modifier = Modifier.height(16.dp))
+                    if (!isMyself) {
+                        Button(
+                            onClick = { onSendRequest(target.studyId) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("send_friend_request_button"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Filled.PersonAdd, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Send Friend Request")
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        ) {
+                            Text(
+                                text = "This is your own profile",
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Active Online Community Students
+        val otherOnlineUsers = onlineUsers.filter { it.studyId != currentUser?.studyId }
+        if (otherOnlineUsers.isNotEmpty()) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "🌐 Active Online Students",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${otherOnlineUsers.size} available",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
+                otherOnlineUsers.take(6).forEach { onlineUser ->
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("send_friend_request_button"),
-                        shape = RoundedCornerShape(12.dp)
+                            .padding(vertical = 4.dp)
                     ) {
-                        Icon(Icons.Filled.PersonAdd, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Send Friend Request")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(IndigoPrimary.copy(alpha = 0.85f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = onlineUser.fullName.take(1),
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = onlineUser.fullName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "ID: ${onlineUser.studyId} • @${onlineUser.username}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            FilledTonalButton(
+                                onClick = {
+                                    onSelectOnlineUser(onlineUser.studyId)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text("Add", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
                     }
                 }
             }

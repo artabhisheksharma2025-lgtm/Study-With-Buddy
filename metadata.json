@@ -1,6 +1,6 @@
 {
-  "name": "Study Tracker & Friends",
-  "description": "Track personal study sessions, goals, streaks, and connect with friends using unique Study IDs.",
+  "name": "Study Tracker",
+  "description": "Track personal study sessions, goals, streaks, and connect with friends online using unique Study IDs.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
