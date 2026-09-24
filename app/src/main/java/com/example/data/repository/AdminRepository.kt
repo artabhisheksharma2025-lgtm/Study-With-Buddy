@@ -87,7 +87,7 @@ class AdminRepository(private val db: AppDatabase) {
         // Seed baseline announcements/banners if empty
         val defaultBanner = AnnouncementEntity(
             announcementId = "banner_welcome",
-            title = "🚀 Welcome to Study Tracker Admin Console",
+            title = "🚀 Welcome to Study With Buddy Admin Console",
             message = "System fully operational. Real-time study telemetry, user moderation, and community synchronization active.",
             priority = "HIGH",
             status = "PUBLISHED",
@@ -133,7 +133,7 @@ class AdminRepository(private val db: AppDatabase) {
 
         // Seed default app settings
         val defaultSettings = listOf(
-            AppSettingEntity("app_name", "Study Tracker & Community", "GENERAL", "Application display title"),
+            AppSettingEntity("app_name", "Study With Buddy", "GENERAL", "Application display title"),
             AppSettingEntity("support_email", "support@studytracker.internal", "GENERAL", "Primary student support contact"),
             AppSettingEntity("min_session_seconds", "60", "STUDY", "Minimum duration required to record a study session"),
             AppSettingEntity("maintenance_mode", "false", "MAINTENANCE", "Emergency maintenance lock for user app"),

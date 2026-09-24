@@ -168,7 +168,7 @@ fun ProfileScreen(
                             onClick = {
                                 val sendIntent = Intent().apply {
                                     action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, "Add me on Study Tracker using my Study ID: ${user.studyId}")
+                                    putExtra(Intent.EXTRA_TEXT, "Add me on Study With Buddy using my Study ID: ${user.studyId}")
                                     type = "text/plain"
                                 }
                                 context.startActivity(Intent.createChooser(sendIntent, "Share Study ID"))

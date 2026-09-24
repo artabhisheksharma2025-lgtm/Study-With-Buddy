@@ -1,16 +1,24 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.model.SubjectEntity
+import java.util.Locale
 
 @Composable
 fun ManualSessionDialog(
@@ -241,6 +249,174 @@ fun AddGoalDialog(
                 }
             ) {
                 Text("Create Goal")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun SetWeeklyGoalDialog(
+    initialTargetHours: Float,
+    initialTitle: String = "Weekly Study Target",
+    onSaveGoal: (hours: Float, title: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var titleInput by remember { mutableStateOf(initialTitle.ifBlank { "Weekly Study Target" }) }
+    var hoursInput by remember { mutableStateOf(String.format(Locale.getDefault(), "%.0f", initialTargetHours.coerceAtLeast(5f))) }
+    var sliderValue by remember { mutableStateOf(initialTargetHours.coerceIn(5f, 60f)) }
+
+    val currentHours = hoursInput.toFloatOrNull() ?: sliderValue
+    val dailyPace = currentHours / 7f
+
+    val presetGoals = listOf(10f, 15f, 20f, 25f, 30f, 40f)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.TrackChanges,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text("🎯 Set Weekly Study Goal", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                OutlinedTextField(
+                    value = titleInput,
+                    onValueChange = { titleInput = it },
+                    label = { Text("Goal Title") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                // Large Hours Display with Daily Pace
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "${String.format(Locale.getDefault(), "%.1f", currentHours)} Hours",
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = "Weekly Target (~${String.format(Locale.getDefault(), "%.1f", dailyPace)} hours/day)",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                // Interactive Slider
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Fine-tune Target", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${sliderValue.toInt()}h", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = {
+                            sliderValue = it
+                            hoursInput = String.format(Locale.getDefault(), "%.0f", it)
+                        },
+                        valueRange = 5f..60f,
+                        steps = 54, // 1h step between 5 and 60
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Quick Presets
+                Text("Popular Weekly Targets:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    presetGoals.take(3).forEach { target ->
+                        SuggestionChip(
+                            onClick = {
+                                sliderValue = target
+                                hoursInput = target.toInt().toString()
+                            },
+                            label = { Text("${target.toInt()}h") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    presetGoals.drop(3).forEach { target ->
+                        SuggestionChip(
+                            onClick = {
+                                sliderValue = target
+                                hoursInput = target.toInt().toString()
+                            },
+                            label = { Text("${target.toInt()}h") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                // Manual Input
+                OutlinedTextField(
+                    value = hoursInput,
+                    onValueChange = {
+                        hoursInput = it
+                        it.toFloatOrNull()?.let { num ->
+                            if (num in 1f..100f) {
+                                sliderValue = num.coerceIn(5f, 60f)
+                            }
+                        }
+                    },
+                    label = { Text("Custom Target Hours") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val finalHours = hoursInput.toFloatOrNull() ?: sliderValue
+                    if (finalHours > 0) {
+                        onSaveGoal(finalHours, titleInput.trim())
+                        onDismiss()
+                    }
+                },
+                enabled = (hoursInput.toFloatOrNull() ?: 0f) > 0f
+            ) {
+                Text("Save Weekly Goal")
             }
         },
         dismissButton = {

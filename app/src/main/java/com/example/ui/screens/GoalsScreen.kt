@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.StudyGoalEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
+import com.example.ui.components.SetWeeklyGoalDialog
+import com.example.ui.components.WeeklyGoalTrackerCard
 import com.example.ui.theme.EmeraldAccent
 import com.example.ui.viewmodel.MainViewModel
 
@@ -32,6 +34,8 @@ fun GoalsScreen(
     modifier: Modifier = Modifier
 ) {
     val goals by mainViewModel.studyGoals.collectAsState()
+    val weeklyGoal by mainViewModel.weeklyGoal.collectAsState()
+    var showSetWeeklyGoalDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -58,14 +62,33 @@ fun GoalsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
-                Text(
-                    text = "Track target study hours & session targets",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                WeeklyGoalTrackerCard(
+                    goal = weeklyGoal,
+                    weeklyTimeSeconds = stats.weeklyTimeSeconds,
+                    totalSessionsCount = stats.totalSessionsCount,
+                    onOpenSetGoalDialog = { showSetWeeklyGoalDialog = true }
                 )
             }
 
-            if (goals.isEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "📋 Other Study Goals",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    TextButton(onClick = onOpenCreateGoalDialog) {
+                        Text("+ Custom Goal")
+                    }
+                }
+            }
+
+            val otherGoals = goals.filter { it.goalId != weeklyGoal?.goalId }
+            if (otherGoals.isEmpty()) {
                 item {
                     Card(
                         shape = RoundedCornerShape(20.dp),
@@ -103,7 +126,7 @@ fun GoalsScreen(
                     }
                 }
             } else {
-                items(goals) { goal ->
+                items(otherGoals) { goal ->
                     val targetSec = goal.targetDurationMinutes * 60L
                     val currentSec = stats.weeklyTimeSeconds
                     val pct = if (targetSec > 0) (currentSec.toFloat() / targetSec.toFloat()).coerceIn(0f, 1f) else 0f
@@ -174,6 +197,18 @@ fun GoalsScreen(
             }
 
             item { Spacer(modifier = Modifier.height(24.dp)) }
+        }
+
+        if (showSetWeeklyGoalDialog) {
+            val targetHrs = (weeklyGoal?.targetDurationMinutes ?: (20 * 60)) / 60f
+            SetWeeklyGoalDialog(
+                initialTargetHours = targetHrs,
+                initialTitle = weeklyGoal?.title ?: "Weekly Study Target",
+                onSaveGoal = { hours, title ->
+                    mainViewModel.setWeeklyGoal(hours, title)
+                },
+                onDismiss = { showSetWeeklyGoalDialog = false }
+            )
         }
     }
 }

@@ -19,11 +19,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.StudyGoalEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
 import com.example.ui.components.BarChartComposable
 import com.example.ui.components.StatCard
 import com.example.ui.components.StreakCalendarCard
+import com.example.ui.components.WeeklyGoalTrackerCard
 import com.example.ui.theme.EmeraldAccent
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
@@ -40,6 +42,9 @@ enum class StatsTab(val title: String) {
 @Composable
 fun StatsScreen(
     stats: UserStudyStats,
+    weeklyGoal: StudyGoalEntity? = null,
+    onOpenSetWeeklyGoalDialog: (() -> Unit)? = null,
+    onStartStudy: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(StatsTab.WEEKLY) }
@@ -146,6 +151,19 @@ fun StatsScreen(
                         icon = Icons.Filled.Speed,
                         iconTint = EmeraldAccent,
                         modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            // Weekly Study Hour Goal Tracker
+            if (selectedTab == StatsTab.WEEKLY && onOpenSetWeeklyGoalDialog != null) {
+                item {
+                    WeeklyGoalTrackerCard(
+                        goal = weeklyGoal,
+                        weeklyTimeSeconds = stats.weeklyTimeSeconds,
+                        totalSessionsCount = stats.totalSessionsCount,
+                        onOpenSetGoalDialog = onOpenSetWeeklyGoalDialog,
+                        onStartStudy = onStartStudy
                     )
                 }
             }

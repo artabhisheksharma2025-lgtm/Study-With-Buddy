@@ -19,6 +19,7 @@ import com.example.ui.components.AddGoalDialog
 import com.example.ui.components.AppBottomNavigation
 import com.example.ui.components.AppTab
 import com.example.ui.components.ManualSessionDialog
+import com.example.ui.components.SetWeeklyGoalDialog
 import com.example.ui.screens.*
 import com.example.ui.screens.admin.AdminPanelScreen
 import com.example.ui.theme.StudyTrackerTheme
@@ -109,10 +110,12 @@ fun MainAppContent(
 
     val stats by mainViewModel.userStats.collectAsState()
     val subjects by mainViewModel.subjects.collectAsState()
+    val weeklyGoal by mainViewModel.weeklyGoal.collectAsState()
     val uiMessage by mainViewModel.uiEventMessage.collectAsState()
 
     var showManualSessionDialog by remember { mutableStateOf(false) }
     var showAddGoalDialog by remember { mutableStateOf(false) }
+    var showSetWeeklyGoalDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiMessage) {
         uiMessage?.let { msg ->
@@ -155,7 +158,12 @@ fun MainAppContent(
                     StudyScreen(mainViewModel = mainViewModel)
                 }
                 AppTab.STATS -> {
-                    StatsScreen(stats = stats)
+                    StatsScreen(
+                        stats = stats,
+                        weeklyGoal = weeklyGoal,
+                        onOpenSetWeeklyGoalDialog = { showSetWeeklyGoalDialog = true },
+                        onStartStudy = { currentTab = AppTab.STUDY }
+                    )
                 }
                 AppTab.FRIENDS -> {
                     FriendsScreen(
@@ -193,6 +201,18 @@ fun MainAppContent(
                     mainViewModel.createGoal(title, hrs, sess, days, subName)
                 },
                 onDismiss = { showAddGoalDialog = false }
+            )
+        }
+
+        if (showSetWeeklyGoalDialog) {
+            val targetHrs = (weeklyGoal?.targetDurationMinutes ?: (20 * 60)) / 60f
+            SetWeeklyGoalDialog(
+                initialTargetHours = targetHrs,
+                initialTitle = weeklyGoal?.title ?: "Weekly Study Target",
+                onSaveGoal = { hours, title ->
+                    mainViewModel.setWeeklyGoal(hours, title)
+                },
+                onDismiss = { showSetWeeklyGoalDialog = false }
             )
         }
     }

@@ -490,7 +490,7 @@ fun QRCodeDialog(
                         onClick = {
                             val sendIntent: Intent = Intent().apply {
                                 action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, "Hey! Add me on Study Tracker using my Study ID: $studyId")
+                                putExtra(Intent.EXTRA_TEXT, "Hey! Add me on Study With Buddy using my Study ID: $studyId")
                                 type = "text/plain"
                             }
                             context.startActivity(Intent.createChooser(sendIntent, "Share Study ID"))

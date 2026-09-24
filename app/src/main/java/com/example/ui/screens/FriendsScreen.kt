@@ -624,7 +624,7 @@ private fun AddFriendContent(
                                         action = Intent.ACTION_SEND
                                         putExtra(
                                             Intent.EXTRA_TEXT,
-                                            "Add me on Study Tracker! My Study ID is ${currentUser.studyId}. Let's study together!"
+                                            "Add me on Study With Buddy! My Study ID is ${currentUser.studyId}. Let's study together!"
                                         )
                                         type = "text/plain"
                                     }

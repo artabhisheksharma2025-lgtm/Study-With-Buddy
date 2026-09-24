@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -75,26 +76,19 @@ fun AuthScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             // App Logo Header
-            Box(
+            Image(
+                painter = painterResource(id = R.drawable.app_logo_1790222630460),
+                contentDescription = "Study With Buddy Logo",
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
-                    .size(90.dp)
+                    .size(96.dp)
                     .clip(RoundedCornerShape(24.dp))
-                    .background(
-                        Brush.linearGradient(listOf(IndigoPrimary, VioletTertiary))
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.School,
-                    contentDescription = "Logo",
-                    tint = Color.White,
-                    modifier = Modifier.size(48.dp)
-                )
-            }
+                    .testTag("app_logo_image")
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Study Tracker",
+                text = "Study With Buddy",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground

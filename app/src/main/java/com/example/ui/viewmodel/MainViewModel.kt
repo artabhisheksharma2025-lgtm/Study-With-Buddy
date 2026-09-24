@@ -63,6 +63,14 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Active Weekly Goal Flow
+    val weeklyGoal: StateFlow<StudyGoalEntity?> = studyGoals
+        .map { list ->
+            list.find { it.goalId.startsWith("weekly_goal_") || it.title.contains("weekly", ignoreCase = true) }
+                ?: list.firstOrNull()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     // Notifications Flow
     val notifications: StateFlow<List<AppNotificationEntity>> = currentUser
         .flatMapLatest { user ->
@@ -348,6 +356,18 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         viewModelScope.launch {
             repository.deleteGoal(goal)
             _uiEventMessage.value = "Goal removed."
+        }
+    }
+
+    fun setWeeklyGoal(targetHours: Float, title: String = "Weekly Study Target") {
+        val uId = currentUserId ?: return
+        if (targetHours <= 0) {
+            _uiEventMessage.value = "Weekly goal must be greater than 0 hours."
+            return
+        }
+        viewModelScope.launch {
+            repository.setWeeklyGoal(userId = uId, targetHours = targetHours, title = title)
+            _uiEventMessage.value = "Weekly study goal set to ${targetHours.toInt()}h!"
         }
     }
 

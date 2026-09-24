@@ -35,8 +35,10 @@ import com.example.data.util.UserStudyStats
 import com.example.ui.components.AppTab
 import com.example.ui.components.LiveCameraQRScannerDialog
 import com.example.ui.components.QuickActionButton
+import com.example.ui.components.SetWeeklyGoalDialog
 import com.example.ui.components.StatCard
 import com.example.ui.components.StreakCalendarCard
+import com.example.ui.components.WeeklyGoalTrackerCard
 import com.example.ui.theme.EmeraldAccent
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
@@ -63,6 +65,9 @@ fun HomeScreen(
 
     val recentSessions by mainViewModel.studySessions.collectAsState()
     val goals by mainViewModel.studyGoals.collectAsState()
+    val weeklyGoal by mainViewModel.weeklyGoal.collectAsState()
+
+    var showSetWeeklyGoalDialog by remember { mutableStateOf(false) }
 
     // Calculate Greeting based on time of day
     val greeting = remember {
@@ -80,17 +85,27 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            text = "$greeting, ${user.fullName.split(" ").firstOrNull() ?: user.fullName} 👋",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Image(
+                            painter = painterResource(id = R.drawable.app_logo_1790222630460),
+                            contentDescription = "Study With Buddy",
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(10.dp))
                         )
-                        Text(
-                            text = "Study ID: ${user.studyId}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "$greeting, ${user.fullName.split(" ").firstOrNull() ?: user.fullName} 👋",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Study ID: ${user.studyId}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -231,21 +246,24 @@ fun HomeScreen(
                                 .testTag("stat_card_weekly")
                         )
 
-                        // Calculate overall goal progress
-                        val activeGoal = goals.firstOrNull()
-                        val goalProgressPct = if (activeGoal != null && activeGoal.targetDurationMinutes > 0) {
-                            val targetSec = activeGoal.targetDurationMinutes * 60L
+                        // Calculate overall weekly goal progress
+                        val activeWeeklyGoal = weeklyGoal ?: goals.firstOrNull()
+                        val targetMinutes = activeWeeklyGoal?.targetDurationMinutes ?: (20 * 60)
+                        val targetSec = targetMinutes * 60L
+                        val goalProgressPct = if (targetSec > 0) {
                             ((stats.weeklyTimeSeconds.toFloat() / targetSec.toFloat()) * 100).toInt().coerceAtMost(100)
-                        } else 68
+                        } else 0
+                        val targetHoursDisplay = (targetMinutes / 60)
 
                         StatCard(
-                            title = "Goal Progress",
+                            title = "Weekly Goal",
                             value = "$goalProgressPct%",
-                            subtitle = activeGoal?.title ?: "Weekly Goal",
+                            subtitle = "${targetHoursDisplay}h Target",
                             icon = Icons.Filled.TrackChanges,
                             iconTint = EmeraldAccent,
                             modifier = Modifier
                                 .weight(1f)
+                                .clickable { showSetWeeklyGoalDialog = true }
                                 .testTag("stat_card_goal")
                         )
                     }
@@ -324,40 +342,46 @@ fun HomeScreen(
                 )
             }
 
-            // Active Goals Preview
+            // Weekly Study Hour Goal Tracker with Progress Bar
             item {
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "🎯 Study Goals",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            TextButton(onClick = onOpenAddGoalDialog) {
-                                Text("+ Add Goal")
-                            }
-                        }
+                WeeklyGoalTrackerCard(
+                    goal = weeklyGoal,
+                    weeklyTimeSeconds = stats.weeklyTimeSeconds,
+                    totalSessionsCount = stats.totalSessionsCount,
+                    onOpenSetGoalDialog = { showSetWeeklyGoalDialog = true },
+                    onStartStudy = { onNavigateTab(AppTab.STUDY) }
+                )
+            }
 
-                        if (goals.isEmpty()) {
-                            Text(
-                                text = "No active goals yet. Create one to stay motivated!",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            goals.take(2).forEach { goal ->
+            // Additional Subject Goals (if user created specific goals)
+            val customGoals = goals.filter { it.goalId != weeklyGoal?.goalId }
+            if (customGoals.isNotEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "📚 Subject Specific Goals",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                TextButton(onClick = onOpenAddGoalDialog) {
+                                    Text("+ New Goal")
+                                }
+                            }
+
+                            customGoals.forEach { goal ->
                                 val targetSec = goal.targetDurationMinutes * 60L
                                 val currentSec = stats.weeklyTimeSeconds
-                                val pct = if (targetSec > 0) (currentSec.toFloat() / targetSec.toFloat()).coerceIn(0f, 1f) else 0.5f
+                                val pct = if (targetSec > 0) (currentSec.toFloat() / targetSec.toFloat()).coerceIn(0f, 1f) else 0f
 
                                 Column(modifier = Modifier.padding(vertical = 6.dp)) {
                                     Row(
@@ -564,6 +588,18 @@ fun HomeScreen(
                         Text("Close")
                     }
                 }
+            )
+        }
+
+        if (showSetWeeklyGoalDialog) {
+            val targetHrs = (weeklyGoal?.targetDurationMinutes ?: (20 * 60)) / 60f
+            SetWeeklyGoalDialog(
+                initialTargetHours = targetHrs,
+                initialTitle = weeklyGoal?.title ?: "Weekly Study Target",
+                onSaveGoal = { hours, title ->
+                    mainViewModel.setWeeklyGoal(hours, title)
+                },
+                onDismiss = { showSetWeeklyGoalDialog = false }
             )
         }
     }

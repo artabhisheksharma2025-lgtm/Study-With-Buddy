@@ -88,7 +88,7 @@ fun AdminAuthScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Study Tracker Admin Portal",
+                text = "Study With Buddy Admin Portal",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = Color.White

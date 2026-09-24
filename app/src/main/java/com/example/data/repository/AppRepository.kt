@@ -290,7 +290,7 @@ class AppRepository(private val db: AppDatabase) {
             AppNotificationEntity(
                 notificationId = "notif_" + UUID.randomUUID().toString(),
                 userId = userId,
-                title = "Welcome to Study Tracker! 🎉",
+                title = "Welcome to Study With Buddy! 🎉",
                 message = "Your unique Study ID is $studyId. Share it with friends to connect!"
             )
         )
@@ -726,6 +726,44 @@ class AppRepository(private val db: AppDatabase) {
 
     suspend fun deleteGoal(goal: StudyGoalEntity) = withContext(Dispatchers.IO) {
         goalDao.deleteGoal(goal)
+    }
+
+    suspend fun setWeeklyGoal(
+        userId: String,
+        targetHours: Float,
+        title: String = "Weekly Study Target"
+    ): StudyGoalEntity = withContext(Dispatchers.IO) {
+        val targetMinutes = (targetHours * 60).toInt()
+        val now = System.currentTimeMillis()
+        val cal = Calendar.getInstance()
+        cal.firstDayOfWeek = Calendar.MONDAY
+        cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val startOfWeek = cal.timeInMillis
+
+        cal.add(Calendar.DAY_OF_WEEK, 6)
+        cal.set(Calendar.HOUR_OF_DAY, 23)
+        cal.set(Calendar.MINUTE, 59)
+        cal.set(Calendar.SECOND, 59)
+        val endOfWeek = cal.timeInMillis
+
+        val goalId = "weekly_goal_${userId}"
+        val goal = StudyGoalEntity(
+            goalId = goalId,
+            userId = userId,
+            title = title.ifBlank { "Weekly Study Target" },
+            targetDurationMinutes = targetMinutes,
+            targetSessions = (targetHours / 2f).toInt().coerceAtLeast(3),
+            startDate = startOfWeek,
+            endDate = endOfWeek,
+            subjectName = "",
+            createdAt = now
+        )
+        goalDao.insertGoal(goal)
+        goal
     }
 
     // --- Notifications ---
