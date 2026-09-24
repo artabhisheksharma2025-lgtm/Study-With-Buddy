@@ -113,6 +113,9 @@ interface StudySessionDao {
 
     @Query("DELETE FROM study_sessions WHERE sessionId = :sessionId AND userId = :userId")
     suspend fun deleteSessionById(sessionId: String, userId: String)
+
+    @Query("DELETE FROM study_sessions WHERE userId = :userId")
+    suspend fun deleteSessionsForUser(userId: String)
 }
 
 @Dao

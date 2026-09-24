@@ -22,6 +22,8 @@ class AppRepository(private val db: AppDatabase) {
     private val friendDao = db.friendDao()
     private val goalDao = db.studyGoalDao()
     private val notificationDao = db.notificationDao()
+    private val dismissedAnnouncementDao = db.dismissedAnnouncementDao()
+    private val announcementDao = db.announcementDao()
 
     val loggedInUserFlow: Flow<UserEntity?> = userDao.getLoggedInUserFlow().map { user ->
         if (user != null && (user.accountStatus == "SUSPENDED" || user.accountStatus == "DISABLED" || user.isDeleted)) {
@@ -35,208 +37,57 @@ class AppRepository(private val db: AppDatabase) {
         userDao.getLoggedInUser()
     }
 
-    suspend fun seedInitialDataIfNeeded() = withContext(Dispatchers.IO) {
-        val users = userDao.getAllUsers()
-        if (users.isEmpty()) {
-            // Seed Default Demo Users so Friends, QR Code, Search, Requests & Comparisons work out of the box!
-            val rahul = UserEntity(
-                userId = "user_rahul",
-                fullName = "Rahul Sharma",
-                username = "rahuls",
-                email = "rahul@example.com",
-                passwordHash = "password123",
-                studyId = "STU-7K92P4",
-                privacyVisibility = "FRIENDS_ONLY",
-                joinedDate = System.currentTimeMillis() - 86400000L * 30
-            )
+    suspend fun getStudyStatsForUser(userId: String): com.example.data.util.UserStudyStats = withContext(Dispatchers.IO) {
+        val sessions = studySessionDao.getSessionsForUser(userId)
+        StatsCalculator.calculateStats(sessions)
+    }
 
-            val priya = UserEntity(
-                userId = "user_priya",
-                fullName = "Priya Patel",
-                username = "priyap",
-                email = "priya@example.com",
-                passwordHash = "password123",
-                studyId = "STU-PRY881",
-                privacyVisibility = "PUBLIC",
-                joinedDate = System.currentTimeMillis() - 86400000L * 45
-            )
+    /**
+     * Synchronizes live data from cloud (announcements, admin updates, etc.)
+     * Automatically triggered on app launch or when user visits with internet.
+     */
+    suspend fun syncFromCloud() = withContext(Dispatchers.IO) {
+        try {
+            // 1. Fetch live announcements updated by Admin
+            val cloudAnnouncements = OnlineSyncService.fetchAllOnlineAnnouncements()
+            if (cloudAnnouncements.isNotEmpty()) {
+                val currentLocalAnnouncements = announcementDao.getAllAnnouncements()
+                val cloudIds = cloudAnnouncements.map { it.announcementId }.toSet()
 
-            val ankit = UserEntity(
-                userId = "user_ankit",
-                fullName = "Ankit Verma",
-                username = "ankitv",
-                email = "ankit@example.com",
-                passwordHash = "password123",
-                studyId = "STU-ANK552",
-                privacyVisibility = "FRIENDS_ONLY",
-                joinedDate = System.currentTimeMillis() - 86400000L * 20
-            )
+                for (ann in cloudAnnouncements) {
+                    announcementDao.insertAnnouncement(ann)
+                }
 
-            // Default Logged In User for quick initial launch (Abhishek)
-            val defaultUser = UserEntity(
-                userId = "user_abhishek",
-                fullName = "Abhishek Sharma",
-                username = "abhisheks",
-                email = "abhishek@example.com",
-                passwordHash = "password123",
-                studyId = "STU-ABH45821",
-                privacyVisibility = "FRIENDS_ONLY",
-                joinedDate = System.currentTimeMillis() - 86400000L * 15,
-                isLoggedIn = true
-            )
+                // Remove local user announcements that were deleted from cloud by admin
+                for (local in currentLocalAnnouncements) {
+                    if (local.displayLocation == "USER_APP" && !cloudIds.contains(local.announcementId)) {
+                        announcementDao.deleteAnnouncement(local)
+                    }
+                }
+            }
 
-            userDao.insertUser(rahul)
-            userDao.insertUser(priya)
-            userDao.insertUser(ankit)
-            userDao.insertUser(defaultUser)
-
-            // Seed subjects for default users
-            seedDefaultSubjectsForUser(defaultUser.userId)
-            seedDefaultSubjectsForUser(rahul.userId)
-            seedDefaultSubjectsForUser(priya.userId)
-            seedDefaultSubjectsForUser(ankit.userId)
-
-            // Seed Friendships & Requests
-            friendDao.insertFriendship(
-                FriendshipEntity(
-                    friendshipId = "f_1",
-                    userId1 = defaultUser.userId,
-                    userId2 = rahul.userId,
-                    createdAt = System.currentTimeMillis() - 86400000L * 10
-                )
-            )
-
-            // Pending request from Priya to Abhishek
-            friendDao.insertFriendRequest(
-                FriendRequestEntity(
-                    requestId = "req_1",
-                    senderId = priya.userId,
-                    receiverId = defaultUser.userId,
-                    status = "PENDING",
-                    createdAt = System.currentTimeMillis() - 3600000L * 2
-                )
-            )
-
-            // Seed sample sessions for default user (Abhishek) & Rahul & Priya
-            val todayDate = getTodayDateString()
-            val yesterdayDate = getFormattedDateString(System.currentTimeMillis() - 86400000L)
-            val day2Before = getFormattedDateString(System.currentTimeMillis() - 86400000L * 2)
-
-            // Abhishek's sessions
-            studySessionDao.insertSession(
-                StudySessionEntity(
-                    sessionId = "sess_abh_1",
-                    userId = defaultUser.userId,
-                    subjectId = "sub_math_${defaultUser.userId}",
-                    subjectName = "Mathematics",
-                    startTime = System.currentTimeMillis() - 7200000L,
-                    endTime = System.currentTimeMillis() - 3600000L,
-                    durationSeconds = 5100L, // 1h 25m
-                    sessionDate = todayDate,
-                    title = "Chapter 5 Revision",
-                    notes = "Completed integration exercises."
-                )
-            )
-            studySessionDao.insertSession(
-                StudySessionEntity(
-                    sessionId = "sess_abh_2",
-                    userId = defaultUser.userId,
-                    subjectId = "sub_phy_${defaultUser.userId}",
-                    subjectName = "Physics",
-                    startTime = System.currentTimeMillis() - 14400000L,
-                    endTime = System.currentTimeMillis() - 10800000L,
-                    durationSeconds = 7200L, // 2h 00m
-                    sessionDate = todayDate,
-                    title = "Thermodynamics Problems",
-                    notes = "Solved 15 numericals."
-                )
-            )
-            studySessionDao.insertSession(
-                StudySessionEntity(
-                    sessionId = "sess_abh_3",
-                    userId = defaultUser.userId,
-                    subjectId = "sub_cs_${defaultUser.userId}",
-                    subjectName = "Computer Science",
-                    startTime = System.currentTimeMillis() - 86400000L - 7200000L,
-                    endTime = System.currentTimeMillis() - 86400000L - 3600000L,
-                    durationSeconds = 7200L, // 2h
-                    sessionDate = yesterdayDate,
-                    title = "Kotlin Jetpack Compose",
-                    notes = "Built UI components."
-                )
-            )
-            studySessionDao.insertSession(
-                StudySessionEntity(
-                    sessionId = "sess_abh_4",
-                    userId = defaultUser.userId,
-                    subjectId = "sub_eng_${defaultUser.userId}",
-                    subjectName = "English",
-                    startTime = System.currentTimeMillis() - 86400000L * 2 - 7200000L,
-                    endTime = System.currentTimeMillis() - 86400000L * 2 - 3600000L,
-                    durationSeconds = 5400L, // 1h 30m
-                    sessionDate = day2Before,
-                    title = "Essay Writing",
-                    notes = "Practiced descriptive writing."
-                )
-            )
-
-            // Rahul's sessions
-            studySessionDao.insertSession(
-                StudySessionEntity(
-                    sessionId = "sess_rah_1",
-                    userId = rahul.userId,
-                    subjectId = "sub_math_${rahul.userId}",
-                    subjectName = "Mathematics",
-                    startTime = System.currentTimeMillis() - 3600000L * 3,
-                    endTime = System.currentTimeMillis() - 3600000L,
-                    durationSeconds = 8100L, // 2h 15m
-                    sessionDate = todayDate,
-                    title = "Calculus Practise"
-                )
-            )
-
-            // Goals for Abhishek
-            goalDao.insertGoal(
-                StudyGoalEntity(
-                    goalId = "goal_1",
-                    userId = defaultUser.userId,
-                    title = "Study 3 hours every day",
-                    targetDurationMinutes = 180,
-                    startDate = System.currentTimeMillis() - 86400000L,
-                    endDate = System.currentTimeMillis() + 86400000L * 7
-                )
-            )
-            goalDao.insertGoal(
-                StudyGoalEntity(
-                    goalId = "goal_2",
-                    userId = defaultUser.userId,
-                    title = "Study Mathematics for 10 hours this week",
-                    targetDurationMinutes = 600,
-                    subjectName = "Mathematics",
-                    startDate = System.currentTimeMillis() - 86400000L * 3,
-                    endDate = System.currentTimeMillis() + 86400000L * 4
-                )
-            )
-
-            // Notifications
-            notificationDao.insertNotification(
-                AppNotificationEntity(
-                    notificationId = "notif_1",
-                    userId = defaultUser.userId,
-                    title = "New Friend Request",
-                    message = "Priya Patel sent you a friend request!"
-                )
-            )
-            notificationDao.insertNotification(
-                AppNotificationEntity(
-                    notificationId = "notif_2",
-                    userId = defaultUser.userId,
-                    title = "Study Streak 🔥",
-                    message = "Awesome! You are on a 3-Day Study Streak. Keep going!"
-                )
-            )
+            // 2. Keep active user profile synced
+            val currentUser = userDao.getLoggedInUser()
+            if (currentUser != null && !currentUser.isDeleted) {
+                OnlineSyncService.syncUserOnline(currentUser, getStudyStatsForUser(currentUser.userId))
+                OnlineSyncService.syncUserAuthOnline(currentUser)
+            }
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Error during cloud sync", e)
         }
     }
+
+    suspend fun seedInitialDataIfNeeded() = withContext(Dispatchers.IO) {
+        // Clean up legacy dummy demo users so that ONLY real users who visit/login appear
+        val dummyIds = listOf("user_rahul", "user_priya", "user_ankit", "user_abhishek")
+        for (id in dummyIds) {
+            userDao.deleteUserById(id)
+            studySessionDao.deleteSessionsForUser(id)
+        }
+        // Immediately sync announcements & updates from cloud
+        syncFromCloud()
+    }
+
 
     suspend fun seedDefaultSubjectsForUser(userId: String) {
         val defaultSubjects = listOf(
@@ -285,6 +136,10 @@ class AppRepository(private val db: AppDatabase) {
         userDao.insertUser(newUser)
         seedDefaultSubjectsForUser(userId)
 
+        // Sync new user credentials and profile to cloud for Admin management
+        OnlineSyncService.syncUserAuthOnline(newUser)
+        OnlineSyncService.syncUserOnline(newUser, getStudyStatsForUser(userId))
+
         // Create welcome notification
         notificationDao.insertNotification(
             AppNotificationEntity(
@@ -300,8 +155,21 @@ class AppRepository(private val db: AppDatabase) {
 
     suspend fun loginUser(email: String, passwordHash: String): Result<UserEntity> =
         withContext(Dispatchers.IO) {
-            val user = userDao.getUserByEmail(email.trim())
-                ?: return@withContext Result.failure(Exception("Account not found with this email."))
+            var user = userDao.getUserByEmail(email.trim())
+            if (user == null) {
+                // If user registered on another device/session, check global cloud auth directory
+                val onlineUsers = OnlineSyncService.fetchAllOnlineAuthUsers()
+                val match = onlineUsers.find { it.email.equals(email.trim(), ignoreCase = true) }
+                if (match != null) {
+                    userDao.insertUser(match)
+                    seedDefaultSubjectsForUser(match.userId)
+                    user = match
+                }
+            }
+
+            if (user == null) {
+                return@withContext Result.failure(Exception("Account not found with this email."))
+            }
 
             if (user.isDeleted) {
                 return@withContext Result.failure(Exception("This account has been deleted."))
@@ -323,6 +191,10 @@ class AppRepository(private val db: AppDatabase) {
             userDao.logoutAllUsers()
             val updatedUser = user.copy(isLoggedIn = true)
             userDao.updateUser(updatedUser)
+
+            // Keep cloud presence and auth active
+            OnlineSyncService.syncUserAuthOnline(updatedUser)
+            OnlineSyncService.syncUserOnline(updatedUser, getStudyStatsForUser(updatedUser.userId))
 
             Result.success(updatedUser)
         }
@@ -810,6 +682,30 @@ class AppRepository(private val db: AppDatabase) {
         }
     }
 
-    fun getActiveAnnouncementsFlow(): Flow<List<AnnouncementEntity>> =
-        db.announcementDao().getPublishedAnnouncementsFlow("USER_APP")
+    fun getActiveAnnouncementsFlow(userId: String? = null): Flow<List<AnnouncementEntity>> {
+        val publishedFlow = db.announcementDao().getPublishedAnnouncementsFlow("USER_APP")
+        val dismissedFlow = if (!userId.isNullOrBlank()) {
+            dismissedAnnouncementDao.getDismissedAnnouncementIdsFlow(userId)
+        } else {
+            dismissedAnnouncementDao.getAllDismissedAnnouncementIdsFlow()
+        }
+        return combine(publishedFlow, dismissedFlow) { announcements, dismissedIds ->
+            val dismissedSet = dismissedIds.toSet()
+            announcements.filter { it.announcementId !in dismissedSet }
+        }
+    }
+
+    suspend fun dismissAnnouncementForUser(userId: String, announcementId: String) = withContext(Dispatchers.IO) {
+        dismissedAnnouncementDao.insertDismissedAnnouncement(
+            DismissedAnnouncementEntity(
+                userId = userId,
+                announcementId = announcementId,
+                dismissedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun getDismissedAnnouncementIds(userId: String): List<String> = withContext(Dispatchers.IO) {
+        dismissedAnnouncementDao.getDismissedAnnouncementIds(userId)
+    }
 }

@@ -79,12 +79,32 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Active Announcements for User App
-    val activeAnnouncements: StateFlow<List<AnnouncementEntity>> = repository.getActiveAnnouncementsFlow()
-        .map { list ->
-            list.filter { it.displayLocation == "BOTH" || it.displayLocation == "USER_APP" }
+    // In-memory immediate dismiss tracking for instant UI removal
+    private val _inMemoryDismissedIds = MutableStateFlow<Set<String>>(emptySet())
+
+    // Active Announcements for User App (filters out dismissed announcements reactively)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val activeAnnouncements: StateFlow<List<AnnouncementEntity>> = currentUser
+        .flatMapLatest { user ->
+            repository.getActiveAnnouncementsFlow(user?.userId)
+        }
+        .combine(_inMemoryDismissedIds) { list, inMemoryDismissed ->
+            list.filter { banner ->
+                (banner.displayLocation == "BOTH" || banner.displayLocation == "USER_APP") &&
+                banner.announcementId !in inMemoryDismissed
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun dismissAnnouncement(announcementId: String) {
+        // 1. Instantly remove from UI so it disappears immediately
+        _inMemoryDismissedIds.update { it + announcementId }
+        // 2. Persist in Room database so it is never shown again to this user
+        viewModelScope.launch {
+            val uid = currentUserId ?: "default"
+            repository.dismissAnnouncementForUser(uid, announcementId)
+        }
+    }
 
     // Toast/Dialog Feedback
     private val _uiEventMessage = MutableStateFlow<String?>(null)
@@ -94,6 +114,15 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
     val completedSessionEvent: StateFlow<StudySessionEntity?> = _completedSessionEvent.asStateFlow()
 
     init {
+        // Real-time automatic cloud sync: automatically pulls live announcements & admin updates
+        viewModelScope.launch {
+            repository.syncFromCloud()
+            while (true) {
+                kotlinx.coroutines.delay(20_000)
+                repository.syncFromCloud()
+            }
+        }
+
         // Observe active timer from DB on launch
         viewModelScope.launch {
             currentUser.collect { user ->

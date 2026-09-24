@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -30,6 +31,7 @@ import com.example.R
 import com.example.data.model.AdminEntity
 import com.example.ui.theme.IndigoPrimary
 import com.example.ui.theme.VioletTertiary
+import com.example.ui.util.CustomerSupportHelper
 import com.example.ui.viewmodel.AuthViewModel
 
 @Composable
@@ -43,12 +45,14 @@ fun AuthScreen(
 
     var isSignUpTab by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+
     // Form states
     var fullName by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("abhishek@example.com") }
-    var password by remember { mutableStateOf("password123") }
-    var confirmPassword by remember { mutableStateOf("password123") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
 
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
@@ -310,59 +314,78 @@ fun AuthScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            // Quick Demo Accounts section
+            // Customer Support WhatsApp Card
             Card(
                 shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                modifier = Modifier.fillMaxWidth()
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("auth_customer_support_card")
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp)
                 ) {
-                    Text(
-                        text = "⚡ Quick Demo Login",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Tap a pre-seeded account to test instantly:",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF25D366)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.SupportAgent,
+                                contentDescription = "Support",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Need Help? Customer Support",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "WhatsApp: +91 9433656298",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedButton(
+                        Button(
                             onClick = {
-                                authViewModel.login("abhishek@example.com", "password123")
+                                CustomerSupportHelper.openWhatsApp(
+                                    context,
+                                    "Hello Support, I have a query about logging in or using the Study With Buddy app."
+                                )
                             },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Text("Abhishek", fontSize = 12.sp)
+                            Icon(Icons.Filled.Chat, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("WhatsApp Support", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
                         }
+
                         OutlinedButton(
-                            onClick = {
-                                authViewModel.login("rahul@example.com", "password123")
-                            },
-                            modifier = Modifier.weight(1f),
+                            onClick = { CustomerSupportHelper.callSupport(context) },
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("Rahul", fontSize = 12.sp)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                authViewModel.login("priya@example.com", "password123")
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text("Priya", fontSize = 12.sp)
+                            Icon(Icons.Filled.Phone, contentDescription = "Call", modifier = Modifier.size(16.dp))
                         }
                     }
                 }

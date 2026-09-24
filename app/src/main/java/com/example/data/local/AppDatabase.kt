@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.*
 
 @Database(
@@ -22,9 +24,10 @@ import com.example.data.model.*
         ReportEntity::class,
         StudyChallengeEntity::class,
         AppErrorLogEntity::class,
-        AppSettingEntity::class
+        AppSettingEntity::class,
+        DismissedAnnouncementEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -42,10 +45,26 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun challengeDao(): StudyChallengeDao
     abstract fun errorLogDao(): AppErrorLogDao
     abstract fun appSettingDao(): AppSettingDao
+    abstract fun dismissedAnnouncementDao(): DismissedAnnouncementDao
 
     companion object {
         @Volatile
         private var INSTANCE: AppDatabase? = null
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `dismissed_announcements` (
+                        `userId` TEXT NOT NULL,
+                        `announcementId` TEXT NOT NULL,
+                        `dismissedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`userId`, `announcementId`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -54,6 +73,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "study_tracker_db"
                 )
+                    .addMigrations(MIGRATION_2_3)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

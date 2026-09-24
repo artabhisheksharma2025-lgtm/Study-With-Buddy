@@ -33,6 +33,7 @@ import com.example.data.util.UserStudyStats
 import com.example.ui.components.QRCodeDialog
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
+import com.example.ui.util.CustomerSupportHelper
 import com.example.ui.viewmodel.AdminViewModel
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.MainViewModel
@@ -336,6 +337,90 @@ fun ProfileScreen(
                         Icon(Icons.Outlined.Logout, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Log Out / Switch Account", color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+
+            // Customer Support Card (WhatsApp: 9433656298)
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_customer_support_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF25D366)), // WhatsApp Green
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.SupportAgent,
+                                contentDescription = "Support",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "🎧 Customer Support",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "WhatsApp: +91 9433656298",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Need help with your account, study streaks, or queries? Reach out directly to our support team on WhatsApp.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                CustomerSupportHelper.openWhatsApp(
+                                    context,
+                                    "Hello Support, my name is ${user.fullName} (Email: ${user.email}, Study ID: ${user.studyId}). I need help."
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("btn_open_whatsapp_support")
+                        ) {
+                            Icon(Icons.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Chat on WhatsApp", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+
+                        OutlinedButton(
+                            onClick = { CustomerSupportHelper.callSupport(context) },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("btn_call_support")
+                        ) {
+                            Icon(Icons.Filled.Phone, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
                     }
                 }
             }

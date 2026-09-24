@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import com.example.data.local.AppDatabase
 import com.example.data.model.*
+import com.example.data.remote.OnlineSyncService
 import com.example.data.util.SecurityUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -85,22 +86,27 @@ class AdminRepository(private val db: AppDatabase) {
         }
 
         // Seed baseline announcements/banners if empty
-        val defaultBanner = AnnouncementEntity(
-            announcementId = "banner_welcome",
-            title = "🚀 Welcome to Study With Buddy Admin Console",
-            message = "System fully operational. Real-time study telemetry, user moderation, and community synchronization active.",
-            priority = "HIGH",
-            status = "PUBLISHED",
-            targetAudience = "EVERYONE",
-            displayLocation = "BOTH",
-            isDismissible = true,
-            actionLabel = "View Analytics",
-            actionUrl = "analytics",
-            startDate = System.currentTimeMillis() - 86400000L,
-            endDate = System.currentTimeMillis() + 86400000L * 30,
-            createdBy = "Super Admin"
-        )
-        announcementDao.insertAnnouncement(defaultBanner)
+        val existingWelcome = announcementDao.getAnnouncementById("banner_welcome")
+        if (existingWelcome != null && existingWelcome.displayLocation != "ADMIN_DASHBOARD") {
+            announcementDao.updateAnnouncement(existingWelcome.copy(displayLocation = "ADMIN_DASHBOARD", targetAudience = "ADMINS"))
+        } else if (existingWelcome == null) {
+            val defaultBanner = AnnouncementEntity(
+                announcementId = "banner_welcome",
+                title = "🚀 Welcome to Study With Buddy Admin Console",
+                message = "System fully operational. Real-time study telemetry, user moderation, and community synchronization active.",
+                priority = "HIGH",
+                status = "PUBLISHED",
+                targetAudience = "ADMINS",
+                displayLocation = "ADMIN_DASHBOARD",
+                isDismissible = true,
+                actionLabel = "View Analytics",
+                actionUrl = "analytics",
+                startDate = System.currentTimeMillis() - 86400000L,
+                endDate = System.currentTimeMillis() + 86400000L * 30,
+                createdBy = "Super Admin"
+            )
+            announcementDao.insertAnnouncement(defaultBanner)
+        }
 
         val userBanner = AnnouncementEntity(
             announcementId = "banner_user_midterm",
@@ -319,6 +325,78 @@ class AdminRepository(private val db: AppDatabase) {
         Result.success(Unit)
     }
 
+    suspend fun updateUserDetails(
+        actorAdmin: AdminEntity,
+        targetUserId: String,
+        newFullName: String,
+        newEmail: String,
+        newPassword: String,
+        newStatus: String,
+        newStudyId: String
+    ): Result<UserEntity> = withContext(Dispatchers.IO) {
+        if (!SecurityUtils.canManageUsers(actorAdmin.role)) {
+            return@withContext Result.failure(SecurityException("Permission denied for user management."))
+        }
+
+        val target = userDao.getUserById(targetUserId)
+            ?: return@withContext Result.failure(Exception("User not found."))
+
+        val updated = target.copy(
+            fullName = newFullName.trim(),
+            email = newEmail.trim(),
+            passwordHash = newPassword.trim(),
+            accountStatus = newStatus,
+            studyId = newStudyId.trim()
+        )
+        userDao.updateUser(updated)
+        // Sync updated credentials to cloud directory
+        OnlineSyncService.syncUserAuthOnline(updated)
+
+        auditLogDao.insertAuditLog(
+            AdminAuditLogEntity(
+                logId = "log_usr_edit_${System.currentTimeMillis()}",
+                adminId = actorAdmin.adminUid,
+                adminEmail = actorAdmin.email,
+                adminRole = actorAdmin.role,
+                action = "USER_EDITED",
+                targetType = "USER",
+                targetId = targetUserId,
+                description = "User ${updated.fullName} ($targetUserId) updated by ${actorAdmin.email}."
+            )
+        )
+        Result.success(updated)
+    }
+
+    suspend fun fetchAndSyncOnlineUsers(): List<UserEntity> = withContext(Dispatchers.IO) {
+        val onlineUsers = OnlineSyncService.fetchAllOnlineAuthUsers()
+        for (u in onlineUsers) {
+            val local = userDao.getUserById(u.userId)
+            if (local == null) {
+                userDao.insertUser(u)
+            } else {
+                userDao.updateUser(
+                    local.copy(
+                        fullName = u.fullName,
+                        email = u.email,
+                        passwordHash = u.passwordHash,
+                        studyId = u.studyId,
+                        accountStatus = u.accountStatus,
+                        isDeleted = u.isDeleted
+                    )
+                )
+            }
+        }
+        userDao.getAllUsers()
+    }
+
+    suspend fun fetchAndSyncOnlineAnnouncements(): List<AnnouncementEntity> = withContext(Dispatchers.IO) {
+        val onlineAnnouncements = OnlineSyncService.fetchAllOnlineAnnouncements()
+        for (ann in onlineAnnouncements) {
+            announcementDao.insertAnnouncement(ann)
+        }
+        announcementDao.getAllAnnouncements()
+    }
+
     suspend fun deleteUserAccount(
         actorAdmin: AdminEntity,
         targetUserId: String,
@@ -336,7 +414,10 @@ class AdminRepository(private val db: AppDatabase) {
             userDao.updateUser(target.copy(isDeleted = true, accountStatus = "DELETED", isLoggedIn = false))
         } else {
             userDao.deleteUserById(targetUserId)
+            studySessionDao.deleteSessionsForUser(targetUserId)
         }
+        // Also remove user from online cloud directory
+        OnlineSyncService.deleteUserAuthOnline(targetUserId)
 
         auditLogDao.insertAuditLog(
             AdminAuditLogEntity(
@@ -628,6 +709,8 @@ class AdminRepository(private val db: AppDatabase) {
         }
 
         announcementDao.insertAnnouncement(announcement)
+        // Instant real-time cloud sync: pushes update to all active user apps immediately
+        OnlineSyncService.syncAnnouncementOnline(announcement)
         auditLogDao.insertAuditLog(
             AdminAuditLogEntity(
                 logId = "log_ann_${System.currentTimeMillis()}",
@@ -649,6 +732,8 @@ class AdminRepository(private val db: AppDatabase) {
                 return@withContext Result.failure(SecurityException("Permission denied."))
             }
             announcementDao.deleteAnnouncement(announcement)
+            // Instant real-time cloud sync: deletes from cloud so all user apps remove it
+            OnlineSyncService.deleteAnnouncementOnline(announcement.announcementId)
             auditLogDao.insertAuditLog(
                 AdminAuditLogEntity(
                     logId = "log_del_ann_${System.currentTimeMillis()}",

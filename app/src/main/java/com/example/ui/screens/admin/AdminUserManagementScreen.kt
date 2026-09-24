@@ -16,8 +16,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AdminEntity
@@ -40,8 +45,10 @@ fun AdminUserManagementScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("ALL") } // ALL, ACTIVE, SUSPENDED, DISABLED
     var selectedUserForDetail by remember { mutableStateOf<UserEntity?>(null) }
+    var userToEdit by remember { mutableStateOf<UserEntity?>(null) }
     var userToAction by remember { mutableStateOf<Pair<UserEntity, String>?>(null) } // user, actionType
     var actionReason by remember { mutableStateOf("") }
+    var isPermanentDelete by remember { mutableStateOf(false) }
 
     val filteredUsers = remember(users, searchQuery, selectedFilter) {
         users.filter { u ->
@@ -68,7 +75,7 @@ fun AdminUserManagementScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Search & Filter Row
+        // Search & Refresh Row
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -92,6 +99,20 @@ fun AdminUserManagementScreen(
                     .weight(1f)
                     .testTag("admin_user_search_field")
             )
+
+            // Sync from Cloud button
+            FilledTonalIconButton(
+                onClick = { adminViewModel.refreshOnlineData() },
+                modifier = Modifier
+                    .size(52.dp)
+                    .testTag("admin_sync_users_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Sync,
+                    contentDescription = "Sync from Cloud",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
         }
 
         // Filter chips
@@ -129,8 +150,9 @@ fun AdminUserManagementScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "No users found matching filter.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = if (users.isEmpty()) "No users registered yet.\nUsers will appear here live when they register or log in." else "No users found matching filter.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                 }
             }
@@ -150,14 +172,37 @@ fun AdminUserManagementScreen(
                         canManage = SecurityUtils.canManageUsers(admin.role),
                         canDelete = SecurityUtils.canDeleteUser(admin.role),
                         onViewDetails = { selectedUserForDetail = user },
+                        onEdit = { userToEdit = user },
                         onSuspend = { userToAction = user to "SUSPEND" },
                         onActivate = { adminViewModel.updateUserStatus(user.userId, "ACTIVE", "Restored by admin") },
                         onDisable = { userToAction = user to "DISABLE" },
-                        onDelete = { userToAction = user to "DELETE" }
+                        onDelete = {
+                            isPermanentDelete = false
+                            userToAction = user to "DELETE"
+                        }
                     )
                 }
             }
         }
+    }
+
+    // User Edit Dialog
+    userToEdit?.let { user ->
+        EditUserDialog(
+            user = user,
+            onDismiss = { userToEdit = null },
+            onSave = { updatedName, updatedEmail, updatedPassword, updatedStatus, updatedStudyId ->
+                adminViewModel.editUserDetails(
+                    userId = user.userId,
+                    fullName = updatedName,
+                    email = updatedEmail,
+                    password = updatedPassword,
+                    status = updatedStatus,
+                    studyId = updatedStudyId
+                )
+                userToEdit = null
+            }
+        )
     }
 
     // User Details Dialog
@@ -204,20 +249,41 @@ fun AdminUserManagementScreen(
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = when (actionType) {
-                            "DELETE" -> "WARNING: This will permanently or soft-delete ${user.fullName}'s account (${user.email}). All session records and friend links will be impacted."
-                            "SUSPEND" -> "User ${user.fullName} will be prevented from logging in or tracking study time until reinstated."
+                            "DELETE" -> "Are you sure you want to delete ${user.fullName}'s account (${user.email})? This action will remove their access."
+                            "SUSPEND" -> "User ${user.fullName} will be prevented from logging in until reinstated."
                             else -> "Account ${user.fullName} will be disabled."
                         },
                         style = MaterialTheme.typography.bodyMedium
                     )
+
+                    if (actionType == "DELETE") {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isPermanentDelete = !isPermanentDelete }
+                        ) {
+                            Checkbox(
+                                checked = isPermanentDelete,
+                                onCheckedChange = { isPermanentDelete = it }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Permanently delete (Remove completely from database & cloud)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
                     OutlinedTextField(
                         value = actionReason,
                         onValueChange = { actionReason = it },
-                        label = { Text("Reason for audit log (Required)") },
-                        placeholder = { Text("e.g. Terms violation, spamming, student request") },
+                        label = { Text("Reason (Optional)") },
+                        placeholder = { Text("e.g. Terms violation, requested by student") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2
                     )
@@ -228,7 +294,7 @@ fun AdminUserManagementScreen(
                     onClick = {
                         val reason = if (actionReason.isBlank()) "Admin initiated $actionType" else actionReason
                         when (actionType) {
-                            "DELETE" -> adminViewModel.deleteUser(user.userId, softDelete = true, reason = reason)
+                            "DELETE" -> adminViewModel.deleteUser(user.userId, softDelete = !isPermanentDelete, reason = reason)
                             "SUSPEND" -> adminViewModel.updateUserStatus(user.userId, "SUSPENDED", reason)
                             "DISABLE" -> adminViewModel.updateUserStatus(user.userId, "DISABLED", reason)
                         }
@@ -262,21 +328,25 @@ private fun UserAdminCard(
     canManage: Boolean,
     canDelete: Boolean,
     onViewDetails: () -> Unit,
+    onEdit: () -> Unit,
     onSuspend: () -> Unit,
     onActivate: () -> Unit,
     onDisable: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val clipboardManager = LocalClipboardManager.current
+    var passwordVisible by remember { mutableStateOf(false) }
+
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onViewDetails() }
             .testTag("admin_user_card_${user.userId}")
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            // Header Row: Avatar, Name, Email, Status Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -284,11 +354,12 @@ private fun UserAdminCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(42.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center
@@ -297,7 +368,7 @@ private fun UserAdminCard(
                             text = user.fullName.take(1).uppercase(),
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
+                            fontSize = 17.sp
                         )
                     }
 
@@ -308,9 +379,14 @@ private fun UserAdminCard(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "${user.email} • ID: ${user.studyId}",
+                            text = user.email,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Study ID: ${user.studyId}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -319,10 +395,76 @@ private fun UserAdminCard(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
-            Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // PASSWORD DISPLAY SECTION (Requested by User)
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Key,
+                            contentDescription = "Password",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Password:",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = if (passwordVisible) user.passwordHash else "••••••••",
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Row {
+                        IconButton(
+                            onClick = { passwordVisible = !passwordVisible },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = if (passwordVisible) "Hide Password" else "Show Password",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(user.passwordHash))
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCopy,
+                                contentDescription = "Copy Password",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Stats summary row
+            // Stats summary row & Action Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -337,19 +479,23 @@ private fun UserAdminCard(
                         Text("Sessions", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("$sessionsCount", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Column {
-                        Text("Privacy", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(user.privacyVisibility, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
                 }
 
-                // Action buttons
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = onViewDetails) {
-                        Text("Details", fontSize = 12.sp)
-                    }
-
+                // Action buttons: Edit, Suspend/Activate, Delete, Details
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (canManage) {
+                        // Edit button
+                        FilledTonalButton(
+                            onClick = onEdit,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Icon(Icons.Filled.Edit, contentDescription = "Edit", modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Edit", fontSize = 11.sp)
+                        }
+
+                        // Suspend / Activate toggle
                         if (user.accountStatus == "ACTIVE") {
                             IconButton(onClick = onSuspend, modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Filled.Block, contentDescription = "Suspend", tint = Color(0xFFEAB308), modifier = Modifier.size(18.dp))
@@ -366,10 +512,118 @@ private fun UserAdminCard(
                             Icon(Icons.Filled.DeleteOutline, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
                         }
                     }
+
+                    IconButton(onClick = onViewDetails, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Filled.Info, contentDescription = "Details", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+fun EditUserDialog(
+    user: UserEntity,
+    onDismiss: () -> Unit,
+    onSave: (fullName: String, email: String, password: String, status: String, studyId: String) -> Unit
+) {
+    var fullName by remember { mutableStateOf(user.fullName) }
+    var email by remember { mutableStateOf(user.email) }
+    var password by remember { mutableStateOf(user.passwordHash) }
+    var studyId by remember { mutableStateOf(user.studyId) }
+    var selectedStatus by remember { mutableStateOf(user.accountStatus) }
+    var showPassword by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Edit User: ${user.fullName}",
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = fullName,
+                    onValueChange = { fullName = it },
+                    label = { Text("Full Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text("Email Address") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = if (showPassword) "Hide password" else "Show password"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = studyId,
+                    onValueChange = { studyId = it },
+                    label = { Text("Study ID") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Text("Account Status:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("ACTIVE", "SUSPENDED", "DISABLED").forEach { status ->
+                        FilterChip(
+                            selected = selectedStatus == status,
+                            onClick = { selectedStatus = status },
+                            label = { Text(status, fontSize = 11.sp) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (fullName.isNotBlank() && email.isNotBlank()) {
+                        onSave(fullName.trim(), email.trim(), password.trim(), selectedStatus, studyId.trim())
+                    }
+                }
+            ) {
+                Text("Save Changes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable
@@ -403,6 +657,8 @@ fun UserDetailDialog(
     onDismiss: () -> Unit
 ) {
     val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+    val clipboardManager = LocalClipboardManager.current
+    var passwordVisible by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -441,6 +697,31 @@ fun UserDetailDialog(
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("Password:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (passwordVisible) user.passwordHash else "••••••••",
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(onClick = { passwordVisible = !passwordVisible }, modifier = Modifier.size(24.dp)) {
+                                    Icon(
+                                        imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { clipboardManager.setText(AnnotatedString(user.passwordHash)) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Filled.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Study ID:", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(user.studyId, fontSize = 12.sp, fontWeight = FontWeight.Bold)

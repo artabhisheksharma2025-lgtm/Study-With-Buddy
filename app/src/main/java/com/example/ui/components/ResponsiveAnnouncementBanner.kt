@@ -39,8 +39,6 @@ fun ResponsiveAnnouncementBanner(
     val context = LocalContext.current
     var isDismissed by remember(banner.announcementId) { mutableStateOf(false) }
 
-    if (isDismissed) return
-
     val handleAction: () -> Unit = {
         if (onActionClick != null) {
             onActionClick()

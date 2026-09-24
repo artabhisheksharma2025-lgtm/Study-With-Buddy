@@ -151,7 +151,19 @@ fun HomeScreen(
             // Live Administrative Announcements
             if (activeAnnouncements.isNotEmpty()) {
                 items(activeAnnouncements, key = { it.announcementId }) { banner ->
-                    com.example.ui.components.ResponsiveAnnouncementBanner(banner = banner)
+                    com.example.ui.components.ResponsiveAnnouncementBanner(
+                        banner = banner,
+                        onDismiss = {
+                            mainViewModel.dismissAnnouncement(banner.announcementId)
+                        },
+                        onActionClick = {
+                            if (banner.actionUrl == "study" || banner.actionLabel?.contains("Timer", ignoreCase = true) == true) {
+                                onNavigateTab(AppTab.STUDY)
+                            } else if (banner.actionUrl == "stats" || banner.actionLabel?.contains("Analytics", ignoreCase = true) == true) {
+                                onNavigateTab(AppTab.STATS)
+                            }
+                        }
+                    )
                 }
             }
 

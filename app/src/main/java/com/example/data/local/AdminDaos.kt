@@ -63,6 +63,9 @@ interface AnnouncementDao {
     @Update
     suspend fun updateAnnouncement(announcement: AnnouncementEntity)
 
+    @Query("SELECT * FROM announcements ORDER BY createdDate DESC")
+    suspend fun getAllAnnouncements(): List<AnnouncementEntity>
+
     @Delete
     suspend fun deleteAnnouncement(announcement: AnnouncementEntity)
 }

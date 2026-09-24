@@ -118,6 +118,8 @@ class AdminViewModel(private val adminRepo: AdminRepository) : ViewModel() {
     init {
         viewModelScope.launch {
             adminRepo.seedAdminDataIfNeeded()
+            adminRepo.fetchAndSyncOnlineUsers()
+            adminRepo.fetchAndSyncOnlineAnnouncements()
             refreshDashboard()
         }
     }
@@ -307,6 +309,51 @@ class AdminViewModel(private val adminRepo: AdminRepository) : ViewModel() {
             }.onFailure { ex ->
                 _errorMessage.value = ex.message
             }
+        }
+    }
+
+    fun editUserDetails(
+        userId: String,
+        fullName: String,
+        email: String,
+        password: String,
+        status: String,
+        studyId: String
+    ) {
+        val admin = getAuthenticatedAdmin() ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _loadingText.value = "Updating user details..."
+            clearMessages()
+
+            val result = adminRepo.updateUserDetails(
+                actorAdmin = admin,
+                targetUserId = userId,
+                newFullName = fullName,
+                newEmail = email,
+                newPassword = password,
+                newStatus = status,
+                newStudyId = studyId
+            )
+            _isLoading.value = false
+
+            result.onSuccess {
+                _successMessage.value = "User $fullName updated successfully."
+                refreshDashboard()
+            }.onFailure { ex ->
+                _errorMessage.value = ex.message
+            }
+        }
+    }
+
+    fun refreshOnlineData() {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _loadingText.value = "Synchronizing online cloud data..."
+            adminRepo.fetchAndSyncOnlineUsers()
+            adminRepo.fetchAndSyncOnlineAnnouncements()
+            _isLoading.value = false
+            refreshDashboard()
         }
     }
 

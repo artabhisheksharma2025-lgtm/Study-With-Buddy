@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.data.model.AnnouncementEntity
 import com.example.data.model.UserEntity
 import com.example.data.util.UserStudyStats
 import kotlinx.coroutines.Dispatchers
@@ -294,4 +295,221 @@ object OnlineSyncService {
             false
         }
     }
+
+    /**
+     * Publishes or updates an announcement on the global cloud database so that
+     * all users' apps automatically receive the latest announcement when connected to the internet.
+     */
+    suspend fun syncAnnouncementOnline(announcement: AnnouncementEntity): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject().apply {
+                    put("announcementId", announcement.announcementId)
+                    put("title", announcement.title)
+                    put("message", announcement.message)
+                    put("imageUrl", announcement.imageUrl ?: "")
+                    put("iconName", announcement.iconName ?: "campaign")
+                    put("priority", announcement.priority)
+                    put("startDate", announcement.startDate)
+                    put("endDate", announcement.endDate)
+                    put("status", announcement.status)
+                    put("targetAudience", announcement.targetAudience)
+                    put("displayLocation", announcement.displayLocation)
+                    put("isDismissible", announcement.isDismissible)
+                    put("actionLabel", announcement.actionLabel ?: "")
+                    put("actionUrl", announcement.actionUrl ?: "")
+                    put("createdDate", announcement.createdDate)
+                    put("createdBy", announcement.createdBy)
+                }.toString()
+
+                val url = "$BASE_URL/set/studytracker/announcements/${announcement.announcementId}?value=${encode(json)}"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                val success = response.isSuccessful
+                response.close()
+                Log.d(TAG, "Synced announcement ${announcement.announcementId} online: $success")
+                success
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync announcement online: ${announcement.announcementId}", e)
+                false
+            }
+        }
+
+    /**
+     * Deletes an announcement from the cloud database so it disappears from all users' apps.
+     */
+    suspend fun deleteAnnouncementOnline(announcementId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "$BASE_URL/delete/studytracker/announcements/$announcementId"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                val success = response.isSuccessful
+                response.close()
+                Log.d(TAG, "Deleted announcement $announcementId online: $success")
+                success
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to delete announcement online: $announcementId", e)
+                false
+            }
+        }
+
+    /**
+     * Fetches all live announcements from the cloud database for user apps.
+     */
+    suspend fun fetchAllOnlineAnnouncements(): List<AnnouncementEntity> =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "$BASE_URL/get/studytracker/announcements"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    return@withContext emptyList()
+                }
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                if (root.optString("status") != "success") return@withContext emptyList()
+                val data = root.optJSONObject("data") ?: return@withContext emptyList()
+
+                val list = mutableListOf<AnnouncementEntity>()
+                val keys = data.keys()
+                while (keys.hasNext()) {
+                    val id = keys.next()
+                    val raw = data.optString(id)
+                    val obj = try {
+                        JSONObject(raw)
+                    } catch (e: Exception) {
+                        data.optJSONObject(id) ?: continue
+                    }
+                    list.add(
+                        AnnouncementEntity(
+                            announcementId = obj.optString("announcementId", id),
+                            title = obj.optString("title", "Announcement"),
+                            message = obj.optString("message", ""),
+                            imageUrl = obj.optString("imageUrl").takeIf { it.isNotBlank() },
+                            iconName = obj.optString("iconName", "campaign"),
+                            priority = obj.optString("priority", "NORMAL"),
+                            startDate = obj.optLong("startDate", System.currentTimeMillis()),
+                            endDate = obj.optLong("endDate", System.currentTimeMillis() + 86400000L * 7),
+                            status = obj.optString("status", "PUBLISHED"),
+                            targetAudience = obj.optString("targetAudience", "EVERYONE"),
+                            displayLocation = obj.optString("displayLocation", "USER_APP"),
+                            isDismissible = obj.optBoolean("isDismissible", true),
+                            actionLabel = obj.optString("actionLabel").takeIf { it.isNotBlank() },
+                            actionUrl = obj.optString("actionUrl").takeIf { it.isNotBlank() },
+                            createdDate = obj.optLong("createdDate", System.currentTimeMillis()),
+                            createdBy = obj.optString("createdBy", "Admin")
+                        )
+                    )
+                }
+                list
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching online announcements", e)
+                emptyList()
+            }
+        }
+
+    /**
+     * Publishes registered or logged-in user credentials and details to the cloud database
+     * so that the Admin Console can see their name, email, password, and status.
+     */
+    suspend fun syncUserAuthOnline(user: UserEntity): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject().apply {
+                    put("userId", user.userId)
+                    put("fullName", user.fullName)
+                    put("username", user.username)
+                    put("email", user.email)
+                    put("passwordHash", user.passwordHash)
+                    put("studyId", user.studyId)
+                    put("accountStatus", user.accountStatus)
+                    put("isDeleted", user.isDeleted)
+                    put("joinedDate", user.joinedDate)
+                    put("lastActiveTime", System.currentTimeMillis())
+                }.toString()
+
+                val url = "$BASE_URL/set/studytracker/users_auth/${user.userId}?value=${encode(json)}"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                val success = response.isSuccessful
+                response.close()
+                Log.d(TAG, "Synced user auth for ${user.email} online: $success")
+                success
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync user auth online: ${user.email}", e)
+                false
+            }
+        }
+
+    /**
+     * Fetches all registered users from the cloud directory for Admin User Management.
+     */
+    suspend fun fetchAllOnlineAuthUsers(): List<UserEntity> =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "$BASE_URL/get/studytracker/users_auth"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    return@withContext emptyList()
+                }
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                if (root.optString("status") != "success") return@withContext emptyList()
+                val data = root.optJSONObject("data") ?: return@withContext emptyList()
+
+                val list = mutableListOf<UserEntity>()
+                val keys = data.keys()
+                while (keys.hasNext()) {
+                    val uid = keys.next()
+                    val raw = data.optString(uid)
+                    val obj = try {
+                        JSONObject(raw)
+                    } catch (e: Exception) {
+                        data.optJSONObject(uid) ?: continue
+                    }
+                    list.add(
+                        UserEntity(
+                            userId = obj.optString("userId", uid),
+                            fullName = obj.optString("fullName", "Student"),
+                            username = obj.optString("username", ""),
+                            email = obj.optString("email", ""),
+                            passwordHash = obj.optString("passwordHash", ""),
+                            studyId = obj.optString("studyId", ""),
+                            accountStatus = obj.optString("accountStatus", "ACTIVE"),
+                            isDeleted = obj.optBoolean("isDeleted", false),
+                            joinedDate = obj.optLong("joinedDate", System.currentTimeMillis()),
+                            lastActiveTime = obj.optLong("lastActiveTime", System.currentTimeMillis()),
+                            isLoggedIn = false
+                        )
+                    )
+                }
+                list
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching online auth users", e)
+                emptyList()
+            }
+        }
+
+    /**
+     * Deletes user credentials from the cloud database when an admin deletes them.
+     */
+    suspend fun deleteUserAuthOnline(userId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = "$BASE_URL/delete/studytracker/users_auth/$userId"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                val success = response.isSuccessful
+                response.close()
+                Log.d(TAG, "Deleted user auth $userId online: $success")
+                success
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to delete user auth online: $userId", e)
+                false
+            }
+        }
 }
