@@ -15,9 +15,16 @@ import com.example.data.model.*
         FriendRequestEntity::class,
         FriendshipEntity::class,
         StudyGoalEntity::class,
-        AppNotificationEntity::class
+        AppNotificationEntity::class,
+        AdminEntity::class,
+        AdminAuditLogEntity::class,
+        AnnouncementEntity::class,
+        ReportEntity::class,
+        StudyChallengeEntity::class,
+        AppErrorLogEntity::class,
+        AppSettingEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +35,13 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun friendDao(): FriendDao
     abstract fun studyGoalDao(): StudyGoalDao
     abstract fun notificationDao(): AppNotificationDao
+    abstract fun adminDao(): AdminDao
+    abstract fun auditLogDao(): AdminAuditLogDao
+    abstract fun announcementDao(): AnnouncementDao
+    abstract fun reportDao(): ReportDao
+    abstract fun challengeDao(): StudyChallengeDao
+    abstract fun errorLogDao(): AppErrorLogDao
+    abstract fun appSettingDao(): AppSettingDao
 
     companion object {
         @Volatile

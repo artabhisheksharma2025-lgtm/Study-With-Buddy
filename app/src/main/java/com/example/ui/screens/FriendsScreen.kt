@@ -34,6 +34,7 @@ import com.example.data.model.UserEntity
 import com.example.data.remote.OnlineUser
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
+import com.example.ui.components.LiveCameraQRScannerDialog
 import com.example.ui.components.QRScannerDialog
 import com.example.ui.theme.EmeraldAccent
 import com.example.ui.theme.FlameOrange
@@ -92,6 +93,16 @@ fun FriendsScreen(
             TopAppBar(
                 title = { Text("👥 Friends & Study Community", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(
+                        onClick = { showQRScanner = true },
+                        modifier = Modifier.testTag("button_topbar_scan_qr")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.QrCodeScanner,
+                            contentDescription = "Scan Friend QR Code",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     IconButton(
                         onClick = { friendsViewModel.syncOnline() },
                         modifier = Modifier.testTag("button_sync_online")
@@ -290,9 +301,9 @@ fun FriendsScreen(
             )
         }
 
-        // QR Scanner Dialog Modal
+        // Live Camera QR Scanner Dialog Modal
         if (showQRScanner) {
-            QRScannerDialog(
+            LiveCameraQRScannerDialog(
                 onCodeScanned = { code ->
                     showQRScanner = false
                     friendsViewModel.onSearchQueryChanged(code)
@@ -694,11 +705,12 @@ private fun AddFriendContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("scan_qr_button"),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = IndigoPrimary)
                 ) {
-                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Scan Friend's QR Code")
+                    Text("📷 Live Camera Scan QR (Direct Open ID)")
                 }
             }
         }

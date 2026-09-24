@@ -2,7 +2,9 @@ package com.example.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.model.AdminEntity
 import com.example.data.model.UserEntity
+import com.example.data.repository.AdminRepository
 import com.example.data.repository.AppRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,7 +17,10 @@ sealed interface AuthUiState {
     data class Authenticated(val user: UserEntity) : AuthUiState
 }
 
-class AuthViewModel(private val repository: AppRepository) : ViewModel() {
+class AuthViewModel(
+    private val repository: AppRepository,
+    private val adminRepository: AdminRepository
+) : ViewModel() {
 
     private val _authState = MutableStateFlow<AuthUiState>(AuthUiState.Loading)
     val authState: StateFlow<AuthUiState> = _authState.asStateFlow()
@@ -29,6 +34,7 @@ class AuthViewModel(private val repository: AppRepository) : ViewModel() {
     init {
         viewModelScope.launch {
             repository.seedInitialDataIfNeeded()
+            adminRepository.seedAdminDataIfNeeded()
             repository.loggedInUserFlow.collect { user ->
                 if (user != null) {
                     _authState.value = AuthUiState.Authenticated(user)
@@ -70,14 +76,33 @@ class AuthViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
-    fun login(email: String, password: String) {
+    fun login(
+        email: String,
+        password: String,
+        onAdminVerified: (AdminEntity) -> Unit = {}
+    ) {
         if (email.isBlank() || password.isBlank()) {
             _errorMessage.value = "Please enter your email and password."
             return
         }
 
         viewModelScope.launch {
-            val result = repository.loginUser(email, password)
+            val cleanEmail = email.trim()
+
+            // Check if this is an administrator account trying to log in
+            if (adminRepository.isAdminEmail(cleanEmail)) {
+                val adminResult = adminRepository.authenticateAdmin(cleanEmail, password)
+                adminResult.onSuccess { admin ->
+                    _errorMessage.value = null
+                    onAdminVerified(admin)
+                }.onFailure { ex ->
+                    _errorMessage.value = ex.message ?: "Administrator authentication failed."
+                }
+                return@launch
+            }
+
+            // Normal student login
+            val result = repository.loginUser(cleanEmail, password)
             result.onSuccess {
                 _errorMessage.value = null
             }.onFailure { ex ->

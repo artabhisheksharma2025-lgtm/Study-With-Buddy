@@ -71,6 +71,13 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Active Announcements for User App
+    val activeAnnouncements: StateFlow<List<AnnouncementEntity>> = repository.getActiveAnnouncementsFlow()
+        .map { list ->
+            list.filter { it.displayLocation == "BOTH" || it.displayLocation == "USER_APP" }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Toast/Dialog Feedback
     private val _uiEventMessage = MutableStateFlow<String?>(null)
     val uiEventMessage: StateFlow<String?> = _uiEventMessage.asStateFlow()

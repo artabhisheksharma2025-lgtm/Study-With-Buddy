@@ -13,26 +13,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import com.example.data.local.AppDatabase
+import com.example.data.repository.AdminRepository
 import com.example.data.repository.AppRepository
 import com.example.ui.components.AddGoalDialog
 import com.example.ui.components.AppBottomNavigation
 import com.example.ui.components.AppTab
 import com.example.ui.components.ManualSessionDialog
 import com.example.ui.screens.*
+import com.example.ui.screens.admin.AdminPanelScreen
 import com.example.ui.theme.StudyTrackerTheme
-import com.example.ui.viewmodel.AuthUiState
-import com.example.ui.viewmodel.AuthViewModel
-import com.example.ui.viewmodel.FriendsViewModel
-import com.example.ui.viewmodel.MainViewModel
+import com.example.ui.viewmodel.*
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var database: AppDatabase
     private lateinit var repository: AppRepository
+    private lateinit var adminRepository: AdminRepository
 
     private lateinit var authViewModel: AuthViewModel
     private lateinit var mainViewModel: MainViewModel
     private lateinit var friendsViewModel: FriendsViewModel
+    private lateinit var adminViewModel: AdminViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,34 +41,53 @@ class MainActivity : ComponentActivity() {
 
         database = AppDatabase.getInstance(applicationContext)
         repository = AppRepository(database)
+        adminRepository = AdminRepository(database)
 
-        authViewModel = AuthViewModel(repository)
+        authViewModel = AuthViewModel(repository, adminRepository)
         mainViewModel = MainViewModel(repository)
         friendsViewModel = FriendsViewModel(repository)
+        adminViewModel = AdminViewModel(adminRepository)
 
         setContent {
             StudyTrackerTheme {
-                val authState by authViewModel.authState.collectAsState()
+                var isInAdminPanel by remember { mutableStateOf(false) }
 
-                when (val state = authState) {
-                    is AuthUiState.Loading -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator()
+                if (isInAdminPanel) {
+                    AdminPanelScreen(
+                        adminViewModel = adminViewModel,
+                        onExitToUserApp = { isInAdminPanel = false }
+                    )
+                } else {
+                    val authState by authViewModel.authState.collectAsState()
+
+                    when (val state = authState) {
+                        is AuthUiState.Loading -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
                         }
-                    }
-                    is AuthUiState.SignedOut -> {
-                        AuthScreen(authViewModel = authViewModel)
-                    }
-                    is AuthUiState.Authenticated -> {
-                        MainAppContent(
-                            user = state.user,
-                            mainViewModel = mainViewModel,
-                            friendsViewModel = friendsViewModel,
-                            authViewModel = authViewModel
-                        )
+                        is AuthUiState.SignedOut -> {
+                            AuthScreen(
+                                authViewModel = authViewModel,
+                                onAdminVerified = { admin ->
+                                    adminViewModel.setAuthenticatedAdmin(admin)
+                                    isInAdminPanel = true
+                                }
+                            )
+                        }
+                        is AuthUiState.Authenticated -> {
+                            MainAppContent(
+                                user = state.user,
+                                mainViewModel = mainViewModel,
+                                friendsViewModel = friendsViewModel,
+                                authViewModel = authViewModel,
+                                adminViewModel = adminViewModel,
+                                onOpenAdminPanel = { isInAdminPanel = true }
+                            )
+                        }
                     }
                 }
             }
@@ -80,7 +100,9 @@ fun MainAppContent(
     user: com.example.data.model.UserEntity,
     mainViewModel: MainViewModel,
     friendsViewModel: FriendsViewModel,
-    authViewModel: AuthViewModel
+    authViewModel: AuthViewModel,
+    adminViewModel: AdminViewModel,
+    onOpenAdminPanel: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
@@ -123,7 +145,10 @@ fun MainAppContent(
                         mainViewModel = mainViewModel,
                         onNavigateTab = { currentTab = it },
                         onOpenManualSessionDialog = { showManualSessionDialog = true },
-                        onOpenAddGoalDialog = { showAddGoalDialog = true }
+                        onOpenAddGoalDialog = { showAddGoalDialog = true },
+                        onScanFriendQR = {
+                            currentTab = AppTab.FRIENDS
+                        }
                     )
                 }
                 AppTab.STUDY -> {
@@ -143,7 +168,9 @@ fun MainAppContent(
                         user = user,
                         stats = stats,
                         mainViewModel = mainViewModel,
-                        authViewModel = authViewModel
+                        authViewModel = authViewModel,
+                        adminViewModel = adminViewModel,
+                        onOpenAdminPanel = onOpenAdminPanel
                     )
                 }
             }

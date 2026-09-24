@@ -23,7 +23,13 @@ class AppRepository(private val db: AppDatabase) {
     private val goalDao = db.studyGoalDao()
     private val notificationDao = db.notificationDao()
 
-    val loggedInUserFlow: Flow<UserEntity?> = userDao.getLoggedInUserFlow()
+    val loggedInUserFlow: Flow<UserEntity?> = userDao.getLoggedInUserFlow().map { user ->
+        if (user != null && (user.accountStatus == "SUSPENDED" || user.accountStatus == "DISABLED" || user.isDeleted)) {
+            null
+        } else {
+            user
+        }
+    }
 
     suspend fun getLoggedInUser(): UserEntity? = withContext(Dispatchers.IO) {
         userDao.getLoggedInUser()
@@ -296,6 +302,19 @@ class AppRepository(private val db: AppDatabase) {
         withContext(Dispatchers.IO) {
             val user = userDao.getUserByEmail(email.trim())
                 ?: return@withContext Result.failure(Exception("Account not found with this email."))
+
+            if (user.isDeleted) {
+                return@withContext Result.failure(Exception("This account has been deleted."))
+            }
+
+            if (user.accountStatus == "SUSPENDED") {
+                val reason = if (user.suspensionReason.isNotBlank()) " Reason: ${user.suspensionReason}" else ""
+                return@withContext Result.failure(Exception("This account has been suspended by an administrator.$reason"))
+            }
+
+            if (user.accountStatus == "DISABLED") {
+                return@withContext Result.failure(Exception("This account has been disabled by an administrator."))
+            }
 
             if (user.passwordHash != passwordHash) {
                 return@withContext Result.failure(Exception("Incorrect password. Please try again."))
@@ -752,4 +771,7 @@ class AppRepository(private val db: AppDatabase) {
             return String.format(Locale.getDefault(), "%02d:%02d:%02d", h, m, s)
         }
     }
+
+    fun getActiveAnnouncementsFlow(): Flow<List<AnnouncementEntity>> =
+        db.announcementDao().getPublishedAnnouncementsFlow("USER_APP")
 }

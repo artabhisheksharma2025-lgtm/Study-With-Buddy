@@ -18,7 +18,11 @@ data class UserEntity(
     val notificationGoalReminders: Boolean = true,
     val notificationStreakReminders: Boolean = true,
     val notificationFriendRequests: Boolean = true,
-    val notificationFriendActivity: Boolean = true
+    val notificationFriendActivity: Boolean = true,
+    val accountStatus: String = "ACTIVE", // ACTIVE, SUSPENDED, DISABLED
+    val lastActiveTime: Long = System.currentTimeMillis(),
+    val isDeleted: Boolean = false,
+    val suspensionReason: String = ""
 )
 
 @Entity(tableName = "subjects")
@@ -27,7 +31,12 @@ data class SubjectEntity(
     val userId: String,
     val name: String,
     val colorHex: String = "#3F51B5",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val status: String = "ACTIVE", // ACTIVE, INACTIVE
+    val description: String = "",
+    val icon: String = "menu_book",
+    val isDefault: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "study_sessions")
@@ -42,7 +51,12 @@ data class StudySessionEntity(
     val sessionDate: String, // format YYYY-MM-DD
     val title: String = "",
     val notes: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val sessionType: String = "TIMER", // TIMER, MANUAL
+    val isDeleted: Boolean = false,
+    val pausedDurationSeconds: Long = 0L,
+    val timezone: String = "UTC",
+    val updatedTime: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "active_timer")

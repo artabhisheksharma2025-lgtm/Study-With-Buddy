@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -22,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,8 +33,11 @@ import com.example.data.util.UserStudyStats
 import com.example.ui.components.QRCodeDialog
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
+import com.example.ui.viewmodel.AdminViewModel
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.MainViewModel
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,11 +46,21 @@ fun ProfileScreen(
     stats: UserStudyStats,
     mainViewModel: MainViewModel,
     authViewModel: AuthViewModel,
+    adminViewModel: AdminViewModel? = null,
+    onOpenAdminPanel: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var showQRCodeDialog by remember { mutableStateOf(false) }
     var showEditProfileDialog by remember { mutableStateOf(false) }
+    var showAdminAuthDialog by remember { mutableStateOf(false) }
+
+    var adminVerifyEmail by remember { mutableStateOf("") }
+    var adminVerifyPassword by remember { mutableStateOf("") }
+    var adminPasswordVisible by remember { mutableStateOf(false) }
+    var adminAuthError by remember { mutableStateOf<String?>(null) }
+    var isAdminVerifying by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     var editFullName by remember { mutableStateOf(user.fullName) }
     var editUsername by remember { mutableStateOf(user.username) }
@@ -325,6 +340,61 @@ fun ProfileScreen(
                 }
             }
 
+            // Administrator Portal Entry
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        adminVerifyEmail = ""
+                        adminVerifyPassword = ""
+                        adminAuthError = null
+                        showAdminAuthDialog = true
+                    }
+                    .testTag("profile_admin_panel_button")
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF2563EB)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.AdminPanelSettings,
+                            contentDescription = null,
+                            tint = Color.White
+                        )
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Admin Management Console",
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "Protected area for administrators & staff",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Filled.ChevronRight,
+                        contentDescription = null,
+                        tint = Color(0xFF94A3B8)
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
 
@@ -373,6 +443,141 @@ fun ProfileScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { showEditProfileDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // Admin Verification Dialog
+        if (showAdminAuthDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showAdminAuthDialog = false
+                    adminAuthError = null
+                },
+                icon = {
+                    Icon(
+                        Icons.Filled.AdminPanelSettings,
+                        contentDescription = null,
+                        tint = Color(0xFF2563EB),
+                        modifier = Modifier.size(36.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = "Administrator Verification",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Enter your administrator email and password to verify before accessing the admin console.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        OutlinedTextField(
+                            value = adminVerifyEmail,
+                            onValueChange = {
+                                adminVerifyEmail = it
+                                adminAuthError = null
+                            },
+                            label = { Text("Admin Email") },
+                            placeholder = { Text("admin@domain.com") },
+                            leadingIcon = { Icon(Icons.Filled.Email, contentDescription = null) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        OutlinedTextField(
+                            value = adminVerifyPassword,
+                            onValueChange = {
+                                adminVerifyPassword = it
+                                adminAuthError = null
+                            },
+                            label = { Text("Admin Password") },
+                            leadingIcon = { Icon(Icons.Filled.Lock, contentDescription = null) },
+                            trailingIcon = {
+                                IconButton(onClick = { adminPasswordVisible = !adminPasswordVisible }) {
+                                    Icon(
+                                        imageVector = if (adminPasswordVisible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                        contentDescription = "Toggle visibility"
+                                    )
+                                }
+                            },
+                            visualTransformation = if (adminPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        if (adminAuthError != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    text = adminAuthError ?: "",
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (adminVerifyEmail.isBlank() || adminVerifyPassword.isBlank()) {
+                                adminAuthError = "Please enter both admin email and password."
+                                return@Button
+                            }
+                            if (adminViewModel != null) {
+                                coroutineScope.launch {
+                                    isAdminVerifying = true
+                                    adminAuthError = null
+                                    val result = adminViewModel.verifyAndAuthenticateAdmin(adminVerifyEmail.trim(), adminVerifyPassword)
+                                    isAdminVerifying = false
+                                    if (result.isSuccess) {
+                                        showAdminAuthDialog = false
+                                        adminAuthError = null
+                                        onOpenAdminPanel()
+                                    } else {
+                                        adminAuthError = result.exceptionOrNull()?.message ?: "Invalid admin credentials. Access denied."
+                                    }
+                                }
+                            } else {
+                                adminAuthError = "Admin service unavailable."
+                            }
+                        },
+                        enabled = !isAdminVerifying && adminVerifyEmail.isNotBlank() && adminVerifyPassword.isNotBlank()
+                    ) {
+                        if (isAdminVerifying) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Verify & Access")
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showAdminAuthDialog = false
+                            adminAuthError = null
+                        }
+                    ) {
                         Text("Cancel")
                     }
                 }

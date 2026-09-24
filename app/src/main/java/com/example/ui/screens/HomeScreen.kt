@@ -33,6 +33,7 @@ import com.example.data.model.UserEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
 import com.example.ui.components.AppTab
+import com.example.ui.components.LiveCameraQRScannerDialog
 import com.example.ui.components.QuickActionButton
 import com.example.ui.components.StatCard
 import com.example.ui.components.StreakCalendarCard
@@ -52,11 +53,13 @@ fun HomeScreen(
     onNavigateTab: (AppTab) -> Unit,
     onOpenManualSessionDialog: () -> Unit,
     onOpenAddGoalDialog: () -> Unit,
+    onScanFriendQR: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val notifications by mainViewModel.notifications.collectAsState()
     val unreadNotifsCount = notifications.count { !it.isRead }
+    val activeAnnouncements by mainViewModel.activeAnnouncements.collectAsState()
 
     val recentSessions by mainViewModel.studySessions.collectAsState()
     val goals by mainViewModel.studyGoals.collectAsState()
@@ -92,6 +95,16 @@ fun HomeScreen(
                 },
                 actions = {
                     IconButton(
+                        onClick = onScanFriendQR,
+                        modifier = Modifier.testTag("home_scan_qr_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.QrCodeScanner,
+                            contentDescription = "Scan Friend QR Code",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(
                         onClick = { showNotificationsDialog = true },
                         modifier = Modifier.testTag("home_notifications_button")
                     ) {
@@ -120,6 +133,13 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Live Administrative Announcements
+            if (activeAnnouncements.isNotEmpty()) {
+                items(activeAnnouncements, key = { it.announcementId }) { banner ->
+                    com.example.ui.components.ResponsiveAnnouncementBanner(banner = banner)
+                }
+            }
+
             // Hero Illustration Banner
             item {
                 Card(

@@ -33,11 +33,20 @@ interface UserDao {
     @Query("SELECT * FROM users")
     suspend fun getAllUsers(): List<UserEntity>
 
+    @Query("SELECT * FROM users ORDER BY joinedDate DESC")
+    fun getAllUsersFlow(): Flow<List<UserEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUser(user: UserEntity)
 
     @Update
     suspend fun updateUser(user: UserEntity)
+
+    @Delete
+    suspend fun deleteUser(user: UserEntity)
+
+    @Query("DELETE FROM users WHERE userId = :userId")
+    suspend fun deleteUserById(userId: String)
 
     @Query("UPDATE users SET isLoggedIn = 0")
     suspend fun logoutAllUsers()
@@ -54,11 +63,20 @@ interface SubjectDao {
     @Query("SELECT * FROM subjects WHERE userId = :userId ORDER BY name ASC")
     suspend fun getSubjectsForUser(userId: String): List<SubjectEntity>
 
+    @Query("SELECT * FROM subjects ORDER BY name ASC")
+    fun getAllSubjectsFlow(): Flow<List<SubjectEntity>>
+
+    @Query("SELECT * FROM subjects ORDER BY name ASC")
+    suspend fun getAllSubjects(): List<SubjectEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSubject(subject: SubjectEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSubjects(subjects: List<SubjectEntity>)
+
+    @Update
+    suspend fun updateSubject(subject: SubjectEntity)
 
     @Delete
     suspend fun deleteSubject(subject: SubjectEntity)
@@ -71,6 +89,15 @@ interface StudySessionDao {
 
     @Query("SELECT * FROM study_sessions WHERE userId = :userId ORDER BY startTime DESC")
     suspend fun getSessionsForUser(userId: String): List<StudySessionEntity>
+
+    @Query("SELECT * FROM study_sessions ORDER BY startTime DESC")
+    fun getAllSessionsFlow(): Flow<List<StudySessionEntity>>
+
+    @Query("SELECT * FROM study_sessions ORDER BY startTime DESC")
+    suspend fun getAllSessions(): List<StudySessionEntity>
+
+    @Query("SELECT * FROM study_sessions WHERE sessionId = :sessionId LIMIT 1")
+    suspend fun getSessionByIdDirect(sessionId: String): StudySessionEntity?
 
     @Query("SELECT * FROM study_sessions WHERE userId = :userId AND sessionId = :sessionId LIMIT 1")
     suspend fun getSessionById(userId: String, sessionId: String): StudySessionEntity?
@@ -121,9 +148,27 @@ interface FriendDao {
     @Update
     suspend fun updateFriendRequest(request: FriendRequestEntity)
 
+    @Query("SELECT COUNT(*) FROM friend_requests WHERE status = 'PENDING'")
+    suspend fun countPendingRequests(): Int
+
+    @Query("SELECT * FROM friend_requests ORDER BY createdAt DESC")
+    fun getAllFriendRequestsFlow(): Flow<List<FriendRequestEntity>>
+
+    @Delete
+    suspend fun deleteFriendRequest(request: FriendRequestEntity)
+
+    @Query("DELETE FROM friend_requests WHERE requestId = :requestId")
+    suspend fun deleteFriendRequestById(requestId: String)
+
     // Friendships
+    @Query("SELECT COUNT(*) FROM friendships")
+    suspend fun countFriendships(): Int
+
     @Query("SELECT * FROM friendships WHERE userId1 = :userId OR userId2 = :userId")
     fun getFriendshipsFlow(userId: String): Flow<List<FriendshipEntity>>
+
+    @Query("SELECT * FROM friendships ORDER BY createdAt DESC")
+    fun getAllFriendshipsFlow(): Flow<List<FriendshipEntity>>
 
     @Query("SELECT * FROM friendships WHERE userId1 = :userId OR userId2 = :userId")
     suspend fun getFriendships(userId: String): List<FriendshipEntity>
@@ -133,6 +178,9 @@ interface FriendDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFriendship(friendship: FriendshipEntity)
+
+    @Delete
+    suspend fun deleteFriendship(friendship: FriendshipEntity)
 
     @Query("DELETE FROM friendships WHERE (userId1 = :userId1 AND userId2 = :userId2) OR (userId1 = :userId2 AND userId2 = :userId1)")
     suspend fun removeFriendship(userId1: String, userId2: String)

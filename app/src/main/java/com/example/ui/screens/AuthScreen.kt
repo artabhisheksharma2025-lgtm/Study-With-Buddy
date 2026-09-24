@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.AdminEntity
 import com.example.ui.theme.IndigoPrimary
 import com.example.ui.theme.VioletTertiary
 import com.example.ui.viewmodel.AuthViewModel
@@ -33,6 +34,7 @@ import com.example.ui.viewmodel.AuthViewModel
 @Composable
 fun AuthScreen(
     authViewModel: AuthViewModel,
+    onAdminVerified: (AdminEntity) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val errorMessage by authViewModel.errorMessage.collectAsState()
@@ -296,7 +298,7 @@ fun AuthScreen(
                             if (isSignUpTab) {
                                 authViewModel.signUp(fullName, username, email, password, confirmPassword)
                             } else {
-                                authViewModel.login(email, password)
+                                authViewModel.login(email, password, onAdminVerified)
                             }
                         },
                         modifier = Modifier
