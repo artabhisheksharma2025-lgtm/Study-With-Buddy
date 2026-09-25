@@ -279,12 +279,22 @@ fun AuthScreen(
                         ) {
                             TextButton(
                                 onClick = {
-                                    forgotEmail = email
-                                    showForgotPasswordDialog = true
+                                    CustomerSupportHelper.openWhatsAppForForgotPassword(context, email)
                                 },
                                 modifier = Modifier.testTag("forgot_password_button")
                             ) {
-                                Text("Forgot Password?")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Chat,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp),
+                                        tint = Color(0xFF25D366)
+                                    )
+                                    Text("Forgot Password?")
+                                }
                             }
                         }
                     } else {
@@ -396,15 +406,22 @@ fun AuthScreen(
         if (showForgotPasswordDialog) {
             AlertDialog(
                 onDismissRequest = { showForgotPasswordDialog = false },
-                title = { Text("Reset Password") },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Filled.SupportAgent,
+                        contentDescription = null,
+                        tint = Color(0xFF25D366),
+                        modifier = Modifier.size(36.dp)
+                    )
+                },
+                title = { Text("Reset Password Support", fontWeight = FontWeight.Bold) },
                 text = {
-                    Column {
-                        Text("Enter your email address to receive password reset instructions.")
-                        Spacer(modifier = Modifier.height(12.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Connect directly with our customer support team on WhatsApp (+91 9433656298) for instant password recovery.")
                         OutlinedTextField(
                             value = forgotEmail,
                             onValueChange = { forgotEmail = it },
-                            label = { Text("Email Address") },
+                            label = { Text("Registered Email Address") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -413,11 +430,14 @@ fun AuthScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            authViewModel.forgotPassword(forgotEmail)
+                            CustomerSupportHelper.openWhatsAppForForgotPassword(context, forgotEmail)
                             showForgotPasswordDialog = false
-                        }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
                     ) {
-                        Text("Send Link")
+                        Icon(Icons.Filled.Chat, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Open WhatsApp Support", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {

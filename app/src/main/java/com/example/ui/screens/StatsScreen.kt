@@ -23,6 +23,8 @@ import com.example.data.model.StudyGoalEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
 import com.example.ui.components.BarChartComposable
+import com.example.ui.components.DailyGoalTrackerCard
+import com.example.ui.components.GoalPeriod
 import com.example.ui.components.StatCard
 import com.example.ui.components.StreakCalendarCard
 import com.example.ui.components.WeeklyGoalTrackerCard
@@ -42,7 +44,9 @@ enum class StatsTab(val title: String) {
 @Composable
 fun StatsScreen(
     stats: UserStudyStats,
+    dailyGoal: StudyGoalEntity? = null,
     weeklyGoal: StudyGoalEntity? = null,
+    onOpenSetGoalDialog: ((GoalPeriod) -> Unit)? = null,
     onOpenSetWeeklyGoalDialog: (() -> Unit)? = null,
     onStartStudy: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -155,14 +159,37 @@ fun StatsScreen(
                 }
             }
 
-            // Weekly Study Hour Goal Tracker
-            if (selectedTab == StatsTab.WEEKLY && onOpenSetWeeklyGoalDialog != null) {
+            // Goal Progress Tracker (Daily or Weekly depending on active tab)
+            if (selectedTab == StatsTab.DAILY) {
+                item {
+                    DailyGoalTrackerCard(
+                        goal = dailyGoal,
+                        todayTimeSeconds = stats.todayTimeSeconds,
+                        todaySessionsCount = stats.todaySessionsCount,
+                        currentStreakDays = stats.currentStreakDays,
+                        onOpenSetGoalDialog = {
+                            if (onOpenSetGoalDialog != null) {
+                                onOpenSetGoalDialog(GoalPeriod.DAILY)
+                            } else {
+                                onOpenSetWeeklyGoalDialog?.invoke()
+                            }
+                        },
+                        onStartStudy = onStartStudy
+                    )
+                }
+            } else if (selectedTab == StatsTab.WEEKLY) {
                 item {
                     WeeklyGoalTrackerCard(
                         goal = weeklyGoal,
                         weeklyTimeSeconds = stats.weeklyTimeSeconds,
                         totalSessionsCount = stats.totalSessionsCount,
-                        onOpenSetGoalDialog = onOpenSetWeeklyGoalDialog,
+                        onOpenSetGoalDialog = {
+                            if (onOpenSetGoalDialog != null) {
+                                onOpenSetGoalDialog(GoalPeriod.WEEKLY)
+                            } else {
+                                onOpenSetWeeklyGoalDialog?.invoke()
+                            }
+                        },
                         onStartStudy = onStartStudy
                     )
                 }

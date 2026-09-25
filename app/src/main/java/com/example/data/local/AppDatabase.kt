@@ -25,9 +25,11 @@ import com.example.data.model.*
         StudyChallengeEntity::class,
         AppErrorLogEntity::class,
         AppSettingEntity::class,
-        DismissedAnnouncementEntity::class
+        DismissedAnnouncementEntity::class,
+        ChatMessageEntity::class,
+        StudyGroupEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +40,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun friendDao(): FriendDao
     abstract fun studyGoalDao(): StudyGoalDao
     abstract fun notificationDao(): AppNotificationDao
+    abstract fun chatDao(): ChatDao
+    abstract fun studyGroupDao(): StudyGroupDao
     abstract fun adminDao(): AdminDao
     abstract fun auditLogDao(): AdminAuditLogDao
     abstract fun announcementDao(): AnnouncementDao

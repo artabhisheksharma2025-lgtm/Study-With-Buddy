@@ -306,6 +306,8 @@ class AdminRepository(private val db: AppDatabase) {
             isLoggedIn = if (shouldLogout) false else target.isLoggedIn
         )
         userDao.updateUser(updated)
+        // Instantly propagate status change to cloud
+        OnlineSyncService.syncUserAuthOnline(updated)
 
         auditLogDao.insertAuditLog(
             AdminAuditLogEntity(
@@ -325,6 +327,49 @@ class AdminRepository(private val db: AppDatabase) {
         Result.success(Unit)
     }
 
+    suspend fun resetUserPassword(
+        actorAdmin: AdminEntity,
+        targetUserId: String,
+        newPassword: String
+    ): Result<UserEntity> = withContext(Dispatchers.IO) {
+        if (!SecurityUtils.canManageUsers(actorAdmin.role)) {
+            return@withContext Result.failure(SecurityException("Permission denied for user management."))
+        }
+
+        var target = userDao.getUserById(targetUserId)
+        if (target == null) {
+            target = OnlineSyncService.fetchUserAuthById(targetUserId)
+            if (target != null) {
+                userDao.insertUser(target)
+            }
+        }
+        if (target == null) {
+            return@withContext Result.failure(Exception("User not found."))
+        }
+
+        val updated = target.copy(
+            passwordHash = newPassword.trim(),
+            lastActiveTime = System.currentTimeMillis()
+        )
+        userDao.updateUser(updated)
+        // Instantly update cloud database so user can log in immediately from any phone
+        OnlineSyncService.syncUserAuthOnline(updated)
+
+        auditLogDao.insertAuditLog(
+            AdminAuditLogEntity(
+                logId = "log_pwd_reset_${System.currentTimeMillis()}",
+                adminId = actorAdmin.adminUid,
+                adminEmail = actorAdmin.email,
+                adminRole = actorAdmin.role,
+                action = "USER_PASSWORD_RESET",
+                targetType = "USER",
+                targetId = targetUserId,
+                description = "Password for user ${updated.fullName} ($targetUserId) was changed by admin ${actorAdmin.email}."
+            )
+        )
+        Result.success(updated)
+    }
+
     suspend fun updateUserDetails(
         actorAdmin: AdminEntity,
         targetUserId: String,
@@ -338,9 +383,18 @@ class AdminRepository(private val db: AppDatabase) {
             return@withContext Result.failure(SecurityException("Permission denied for user management."))
         }
 
-        val target = userDao.getUserById(targetUserId)
-            ?: return@withContext Result.failure(Exception("User not found."))
+        var target = userDao.getUserById(targetUserId)
+        if (target == null) {
+            target = OnlineSyncService.fetchUserAuthById(targetUserId)
+            if (target != null) {
+                userDao.insertUser(target)
+            }
+        }
+        if (target == null) {
+            return@withContext Result.failure(Exception("User not found."))
+        }
 
+        val oldEmail = target.email
         val updated = target.copy(
             fullName = newFullName.trim(),
             email = newEmail.trim(),
@@ -349,8 +403,15 @@ class AdminRepository(private val db: AppDatabase) {
             studyId = newStudyId.trim()
         )
         userDao.updateUser(updated)
-        // Sync updated credentials to cloud directory
+
+        // If email changed, remove old email index mapping in cloud
+        if (!oldEmail.equals(updated.email, ignoreCase = true)) {
+            OnlineSyncService.deleteUserAuthOnline(targetUserId, oldEmail)
+        }
+
+        // Sync updated credentials and public profile to cloud directory
         OnlineSyncService.syncUserAuthOnline(updated)
+        OnlineSyncService.syncUserOnline(updated)
 
         auditLogDao.insertAuditLog(
             AdminAuditLogEntity(
@@ -411,13 +472,14 @@ class AdminRepository(private val db: AppDatabase) {
             ?: return@withContext Result.failure(Exception("User not found."))
 
         if (softDelete) {
-            userDao.updateUser(target.copy(isDeleted = true, accountStatus = "DELETED", isLoggedIn = false))
+            val deleted = target.copy(isDeleted = true, accountStatus = "DELETED", isLoggedIn = false)
+            userDao.updateUser(deleted)
+            OnlineSyncService.syncUserAuthOnline(deleted)
         } else {
             userDao.deleteUserById(targetUserId)
             studySessionDao.deleteSessionsForUser(targetUserId)
+            OnlineSyncService.deleteUserAuthOnline(targetUserId, target.email)
         }
-        // Also remove user from online cloud directory
-        OnlineSyncService.deleteUserAuthOnline(targetUserId)
 
         auditLogDao.insertAuditLog(
             AdminAuditLogEntity(

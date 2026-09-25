@@ -2,6 +2,8 @@ package com.example.data.remote
 
 import android.util.Log
 import com.example.data.model.AnnouncementEntity
+import com.example.data.model.ChatMessageEntity
+import com.example.data.model.StudyGroupEntity
 import com.example.data.model.UserEntity
 import com.example.data.util.UserStudyStats
 import kotlinx.coroutines.Dispatchers
@@ -410,9 +412,33 @@ object OnlineSyncService {
             }
         }
 
+    fun emailToKey(email: String): String =
+        email.trim().lowercase()
+            .replace("@", "_at_")
+            .replace(".", "_dot_")
+            .replace("+", "_plus_")
+            .replace("-", "_dash_")
+
+    private fun parseUserEntityFromJson(obj: JSONObject, defaultId: String = ""): UserEntity {
+        return UserEntity(
+            userId = obj.optString("userId", defaultId),
+            fullName = obj.optString("fullName", "Student"),
+            username = obj.optString("username", ""),
+            email = obj.optString("email", ""),
+            passwordHash = obj.optString("passwordHash", ""),
+            studyId = obj.optString("studyId", ""),
+            accountStatus = obj.optString("accountStatus", "ACTIVE"),
+            isDeleted = obj.optBoolean("isDeleted", false),
+            joinedDate = obj.optLong("joinedDate", System.currentTimeMillis()),
+            lastActiveTime = obj.optLong("lastActiveTime", System.currentTimeMillis()),
+            suspensionReason = obj.optString("suspensionReason", ""),
+            isLoggedIn = false
+        )
+    }
+
     /**
      * Publishes registered or logged-in user credentials and details to the cloud database
-     * so that the Admin Console can see their name, email, password, and status.
+     * so that any mobile device can log in and the Admin Console can manage them.
      */
     suspend fun syncUserAuthOnline(user: UserEntity): Boolean =
         withContext(Dispatchers.IO) {
@@ -427,21 +453,103 @@ object OnlineSyncService {
                     put("accountStatus", user.accountStatus)
                     put("isDeleted", user.isDeleted)
                     put("joinedDate", user.joinedDate)
+                    put("suspensionReason", user.suspensionReason)
                     put("lastActiveTime", System.currentTimeMillis())
                 }.toString()
 
-                val url = "$BASE_URL/set/studytracker/users_auth/${user.userId}?value=${encode(json)}"
-                val request = Request.Builder().url(url).build()
-                val response = client.newCall(request).execute()
-                val success = response.isSuccessful
-                response.close()
-                Log.d(TAG, "Synced user auth for ${user.email} online: $success")
-                success
+                val encodedJson = encode(json)
+
+                // 1. Save under user ID
+                val urlId = "$BASE_URL/set/studytracker/users_auth/${user.userId}?value=$encodedJson"
+                val reqId = Request.Builder().url(urlId).build()
+                client.newCall(reqId).execute().close()
+
+                // 2. Save under email index for instant direct lookup on any device
+                if (user.email.isNotBlank()) {
+                    val emailKey = emailToKey(user.email)
+                    val urlEmail = "$BASE_URL/set/studytracker/users_auth_email/$emailKey?value=$encodedJson"
+                    val reqEmail = Request.Builder().url(urlEmail).build()
+                    client.newCall(reqEmail).execute().close()
+                }
+
+                Log.d(TAG, "Synced user auth for ${user.email} online successfully")
+                true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to sync user auth online: ${user.email}", e)
                 false
             }
         }
+
+    /**
+     * Fetches user auth details by user ID from cloud.
+     */
+    suspend fun fetchUserAuthById(userId: String): UserEntity? = withContext(Dispatchers.IO) {
+        try {
+            val url = "$BASE_URL/get/studytracker/users_auth/$userId"
+            val request = Request.Builder().url(url).build()
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                response.close()
+                return@withContext null
+            }
+            val body = response.body?.string() ?: return@withContext null
+            val root = JSONObject(body)
+            if (root.optString("status") != "success") return@withContext null
+            val raw = root.optString("data")
+            val obj = try {
+                JSONObject(raw)
+            } catch (e: Exception) {
+                root.optJSONObject("data") ?: return@withContext null
+            }
+            parseUserEntityFromJson(obj, userId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching user auth by ID: $userId", e)
+            null
+        }
+    }
+
+    /**
+     * Finds a user in the cloud by email for instant multi-device login & credential verification.
+     */
+    suspend fun findUserAuthByEmail(email: String): UserEntity? = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim()
+        if (cleanEmail.isBlank()) return@withContext null
+        try {
+            // 1. Try fast O(1) email index lookup
+            val emailKey = emailToKey(cleanEmail)
+            val url = "$BASE_URL/get/studytracker/users_auth_email/$emailKey"
+            val request = Request.Builder().url(url).build()
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                if (!body.isNullOrBlank()) {
+                    val root = JSONObject(body)
+                    if (root.optString("status") == "success") {
+                        val raw = root.optString("data")
+                        val obj = try {
+                            JSONObject(raw)
+                        } catch (e: Exception) {
+                            root.optJSONObject("data")
+                        }
+                        if (obj != null && obj.optString("email").equals(cleanEmail, ignoreCase = true)) {
+                            return@withContext parseUserEntityFromJson(obj)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Fast email index lookup failed, trying full directory scan", e)
+        }
+
+        // 2. Fallback: Full directory scan across users_auth
+        try {
+            val all = fetchAllOnlineAuthUsers()
+            all.find { it.email.equals(cleanEmail, ignoreCase = true) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding user auth by email: $cleanEmail", e)
+            null
+        }
+    }
 
     /**
      * Fetches all registered users from the cloud directory for Admin User Management.
@@ -471,21 +579,7 @@ object OnlineSyncService {
                     } catch (e: Exception) {
                         data.optJSONObject(uid) ?: continue
                     }
-                    list.add(
-                        UserEntity(
-                            userId = obj.optString("userId", uid),
-                            fullName = obj.optString("fullName", "Student"),
-                            username = obj.optString("username", ""),
-                            email = obj.optString("email", ""),
-                            passwordHash = obj.optString("passwordHash", ""),
-                            studyId = obj.optString("studyId", ""),
-                            accountStatus = obj.optString("accountStatus", "ACTIVE"),
-                            isDeleted = obj.optBoolean("isDeleted", false),
-                            joinedDate = obj.optLong("joinedDate", System.currentTimeMillis()),
-                            lastActiveTime = obj.optLong("lastActiveTime", System.currentTimeMillis()),
-                            isLoggedIn = false
-                        )
-                    )
+                    list.add(parseUserEntityFromJson(obj, uid))
                 }
                 list
             } catch (e: Exception) {
@@ -497,7 +591,7 @@ object OnlineSyncService {
     /**
      * Deletes user credentials from the cloud database when an admin deletes them.
      */
-    suspend fun deleteUserAuthOnline(userId: String): Boolean =
+    suspend fun deleteUserAuthOnline(userId: String, email: String? = null): Boolean =
         withContext(Dispatchers.IO) {
             try {
                 val url = "$BASE_URL/delete/studytracker/users_auth/$userId"
@@ -505,6 +599,14 @@ object OnlineSyncService {
                 val response = client.newCall(request).execute()
                 val success = response.isSuccessful
                 response.close()
+
+                if (!email.isNullOrBlank()) {
+                    val emailKey = emailToKey(email)
+                    val emailUrl = "$BASE_URL/delete/studytracker/users_auth_email/$emailKey"
+                    val reqEmail = Request.Builder().url(emailUrl).build()
+                    client.newCall(reqEmail).execute().close()
+                }
+
                 Log.d(TAG, "Deleted user auth $userId online: $success")
                 success
             } catch (e: Exception) {
@@ -512,4 +614,238 @@ object OnlineSyncService {
                 false
             }
         }
+
+    /**
+     * Sends a real-time message to a direct chat channel or a study group channel online.
+     */
+    suspend fun sendChatMessageOnline(message: ChatMessageEntity): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject().apply {
+                    put("messageId", message.messageId)
+                    put("channelId", message.channelId)
+                    put("senderUserId", message.senderUserId)
+                    put("senderName", message.senderName)
+                    put("senderStudyId", message.senderStudyId)
+                    put("text", message.text)
+                    put("timestamp", message.timestamp)
+                    put("isGroup", message.isGroup)
+                    put("groupId", message.groupId ?: "")
+                }.toString()
+
+                val path = if (message.isGroup) "group_messages/${message.channelId}" else "chats/${message.channelId}"
+                val url = "$BASE_URL/set/studytracker/$path/${message.messageId}?value=${encode(json)}"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                val success = response.isSuccessful
+                response.close()
+                Log.d(TAG, "Sent chat message ${message.messageId} to $path: $success")
+                success
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to send chat message online", e)
+                false
+            }
+        }
+
+    /**
+     * Fetches real-time chat messages for a channel (direct friend chat or study group).
+     */
+    suspend fun fetchChatMessagesOnline(channelId: String, isGroup: Boolean = false): List<ChatMessageEntity> =
+        withContext(Dispatchers.IO) {
+            try {
+                val path = if (isGroup) "group_messages/$channelId" else "chats/$channelId"
+                val url = "$BASE_URL/get/studytracker/$path"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+                if (!response.isSuccessful) {
+                    response.close()
+                    return@withContext emptyList()
+                }
+
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                if (root.optString("status") != "success") return@withContext emptyList()
+                val data = root.optJSONObject("data") ?: return@withContext emptyList()
+
+                val list = mutableListOf<ChatMessageEntity>()
+                val keys = data.keys()
+                while (keys.hasNext()) {
+                    val msgId = keys.next()
+                    val raw = data.optString(msgId)
+                    val obj = try {
+                        JSONObject(raw)
+                    } catch (e: Exception) {
+                        data.optJSONObject(msgId) ?: continue
+                    }
+                    list.add(
+                        ChatMessageEntity(
+                            messageId = obj.optString("messageId", msgId),
+                            channelId = obj.optString("channelId", channelId),
+                            senderUserId = obj.optString("senderUserId"),
+                            senderName = obj.optString("senderName", "Friend"),
+                            senderStudyId = obj.optString("senderStudyId", ""),
+                            text = obj.optString("text", ""),
+                            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                            isGroup = obj.optBoolean("isGroup", isGroup),
+                            groupId = obj.optString("groupId").takeIf { it.isNotBlank() },
+                            isRead = true
+                        )
+                    )
+                }
+                list.sortedBy { it.timestamp }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching chat messages online for $channelId", e)
+                emptyList()
+            }
+        }
+
+    /**
+     * Publishes a newly created or updated study group to the cloud for all members to discover and join.
+     */
+    suspend fun syncStudyGroupOnline(group: StudyGroupEntity): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val json = JSONObject().apply {
+                    put("groupId", group.groupId)
+                    put("name", group.name)
+                    put("description", group.description)
+                    put("createdByUserId", group.createdByUserId)
+                    put("createdByName", group.createdByName)
+                    put("createdByStudyId", group.createdByStudyId)
+                    put("createdAt", group.createdAt)
+                    put("memberUserIds", group.memberUserIds)
+                    put("memberStudyIds", group.memberStudyIds)
+                    put("memberNames", group.memberNames)
+                    put("iconName", group.iconName)
+                    put("colorHex", group.colorHex)
+                    put("lastMessageText", group.lastMessageText)
+                    put("lastMessageTime", group.lastMessageTime)
+                }.toString()
+
+                val encodedJson = encode(json)
+
+                // 1. Save in master groups directory
+                val masterUrl = "$BASE_URL/set/studytracker/groups/${group.groupId}?value=$encodedJson"
+                client.newCall(Request.Builder().url(masterUrl).build()).execute().close()
+
+                // 2. Index for each member Study ID so they find it instantly
+                val studyIds = group.memberStudyIds.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }
+                for (sId in studyIds) {
+                    val userGrpUrl = "$BASE_URL/set/studytracker/user_groups/$sId/${group.groupId}?value=$encodedJson"
+                    client.newCall(Request.Builder().url(userGrpUrl).build()).execute().close()
+                }
+
+                Log.d(TAG, "Synced study group ${group.name} (${group.groupId}) online for ${studyIds.size} members")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Error syncing study group online", e)
+                false
+            }
+        }
+
+    /**
+     * Fetches all study groups in which the user is a member.
+     */
+    suspend fun fetchGroupsForUserOnline(userStudyId: String): List<StudyGroupEntity> =
+        withContext(Dispatchers.IO) {
+            try {
+                val cleanId = userStudyId.trim().uppercase()
+                val url = "$BASE_URL/get/studytracker/user_groups/$cleanId"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+
+                val list = mutableListOf<StudyGroupEntity>()
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (!body.isNullOrBlank()) {
+                        val root = JSONObject(body)
+                        if (root.optString("status") == "success") {
+                            val data = root.optJSONObject("data")
+                            if (data != null) {
+                                val keys = data.keys()
+                                while (keys.hasNext()) {
+                                    val gId = keys.next()
+                                    val raw = data.optString(gId)
+                                    val obj = try {
+                                        JSONObject(raw)
+                                    } catch (e: Exception) {
+                                        data.optJSONObject(gId) ?: continue
+                                    }
+                                    list.add(parseStudyGroupFromJson(obj, gId))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Also check master groups directory in case user wasn't indexed in user_groups
+                try {
+                    val masterUrl = "$BASE_URL/get/studytracker/groups"
+                    val masterResponse = client.newCall(Request.Builder().url(masterUrl).build()).execute()
+                    if (masterResponse.isSuccessful) {
+                        val masterBody = masterResponse.body?.string()
+                        if (!masterBody.isNullOrBlank()) {
+                            val root = JSONObject(masterBody)
+                            val data = root.optJSONObject("data")
+                            if (data != null) {
+                                val keys = data.keys()
+                                while (keys.hasNext()) {
+                                    val gId = keys.next()
+                                    if (list.any { it.groupId == gId }) continue
+                                    val raw = data.optString(gId)
+                                    val obj = try {
+                                        JSONObject(raw)
+                                    } catch (e: Exception) {
+                                        data.optJSONObject(gId) ?: continue
+                                    }
+                                    val memberStudies = obj.optString("memberStudyIds")
+                                    if (memberStudies.contains(cleanId, ignoreCase = true) ||
+                                        obj.optString("createdByStudyId").equals(cleanId, ignoreCase = true)
+                                    ) {
+                                        list.add(parseStudyGroupFromJson(obj, gId))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Master group directory check fallback exception", e)
+                }
+
+                list.sortedByDescending { it.lastMessageTime }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching groups for user $userStudyId online", e)
+                emptyList()
+            }
+        }
+
+    private fun parseStudyGroupFromJson(obj: JSONObject, defaultId: String): StudyGroupEntity {
+        return StudyGroupEntity(
+            groupId = obj.optString("groupId", defaultId),
+            name = obj.optString("name", "Study Group"),
+            description = obj.optString("description", ""),
+            createdByUserId = obj.optString("createdByUserId", ""),
+            createdByName = obj.optString("createdByName", "Admin"),
+            createdByStudyId = obj.optString("createdByStudyId", ""),
+            createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
+            memberUserIds = obj.optString("memberUserIds", ""),
+            memberStudyIds = obj.optString("memberStudyIds", ""),
+            memberNames = obj.optString("memberNames", ""),
+            iconName = obj.optString("iconName", "groups"),
+            colorHex = obj.optString("colorHex", "#3F51B5"),
+            lastMessageText = obj.optString("lastMessageText", ""),
+            lastMessageTime = obj.optLong("lastMessageTime", System.currentTimeMillis())
+        )
+    }
+
+    suspend fun deleteStudyGroupOnline(groupId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val url = "$BASE_URL/delete/studytracker/groups/$groupId"
+            client.newCall(Request.Builder().url(url).build()).execute().close()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error deleting study group online", e)
+            false
+        }
+    }
 }

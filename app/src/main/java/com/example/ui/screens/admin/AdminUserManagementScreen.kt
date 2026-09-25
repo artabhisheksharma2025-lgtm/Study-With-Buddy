@@ -46,6 +46,7 @@ fun AdminUserManagementScreen(
     var selectedFilter by remember { mutableStateOf("ALL") } // ALL, ACTIVE, SUSPENDED, DISABLED
     var selectedUserForDetail by remember { mutableStateOf<UserEntity?>(null) }
     var userToEdit by remember { mutableStateOf<UserEntity?>(null) }
+    var userToChangePassword by remember { mutableStateOf<UserEntity?>(null) }
     var userToAction by remember { mutableStateOf<Pair<UserEntity, String>?>(null) } // user, actionType
     var actionReason by remember { mutableStateOf("") }
     var isPermanentDelete by remember { mutableStateOf(false) }
@@ -173,6 +174,7 @@ fun AdminUserManagementScreen(
                         canDelete = SecurityUtils.canDeleteUser(admin.role),
                         onViewDetails = { selectedUserForDetail = user },
                         onEdit = { userToEdit = user },
+                        onChangePassword = { userToChangePassword = user },
                         onSuspend = { userToAction = user to "SUSPEND" },
                         onActivate = { adminViewModel.updateUserStatus(user.userId, "ACTIVE", "Restored by admin") },
                         onDisable = { userToAction = user to "DISABLE" },
@@ -184,6 +186,18 @@ fun AdminUserManagementScreen(
                 }
             }
         }
+    }
+
+    // Quick Change Password Dialog
+    userToChangePassword?.let { user ->
+        AdminChangePasswordDialog(
+            user = user,
+            onDismiss = { userToChangePassword = null },
+            onConfirm = { newPassword ->
+                adminViewModel.resetUserPassword(user.userId, newPassword)
+                userToChangePassword = null
+            }
+        )
     }
 
     // User Edit Dialog
@@ -329,6 +343,7 @@ private fun UserAdminCard(
     canDelete: Boolean,
     onViewDetails: () -> Unit,
     onEdit: () -> Unit,
+    onChangePassword: () -> Unit,
     onSuspend: () -> Unit,
     onActivate: () -> Unit,
     onDisable: () -> Unit,
@@ -433,7 +448,7 @@ private fun UserAdminCard(
                         )
                     }
 
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
                             onClick = { passwordVisible = !passwordVisible },
                             modifier = Modifier.size(28.dp)
@@ -455,6 +470,19 @@ private fun UserAdminCard(
                                 contentDescription = "Copy Password",
                                 modifier = Modifier.size(16.dp)
                             )
+                        }
+                        if (canManage) {
+                            IconButton(
+                                onClick = onChangePassword,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.VpnKey,
+                                    contentDescription = "Change Password",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -770,6 +798,75 @@ fun UserDetailDialog(
         confirmButton = {
             TextButton(onClick = onDismiss) {
                 Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+fun AdminChangePasswordDialog(
+    user: UserEntity,
+    onDismiss: () -> Unit,
+    onConfirm: (newPassword: String) -> Unit
+) {
+    var newPassword by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(Icons.Filled.LockReset, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        },
+        title = {
+            Text("Change Password", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Update password for ${user.fullName} (${user.email}).",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Once saved, the user can immediately log in from any phone using this new password.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                OutlinedTextField(
+                    value = newPassword,
+                    onValueChange = { newPassword = it },
+                    label = { Text("New Password") },
+                    singleLine = true,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = if (passwordVisible) "Hide password" else "Show password"
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (newPassword.isNotBlank()) {
+                        onConfirm(newPassword.trim())
+                    }
+                },
+                enabled = newPassword.length >= 4
+            ) {
+                Text("Save & Sync to Cloud")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
             }
         }
     )

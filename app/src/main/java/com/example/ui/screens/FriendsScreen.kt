@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.StudyGroupEntity
 import com.example.data.model.UserEntity
 import com.example.data.remote.OnlineUser
 import com.example.data.repository.AppRepository
@@ -45,6 +47,7 @@ import com.example.ui.viewmodel.MainViewModel
 
 enum class FriendsSubTab(val title: String) {
     MY_FRIENDS("My Friends"),
+    GROUPS("Study Groups"),
     ADD_FRIEND("Add Friend"),
     REQUESTS("Requests"),
     ACTIVITY_FEED("Activity Feed"),
@@ -58,6 +61,22 @@ fun FriendsScreen(
     mainViewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
+    val activeDirectChatFriend by friendsViewModel.activeDirectChatFriend.collectAsState()
+    val activeStudyGroup by friendsViewModel.activeStudyGroup.collectAsState()
+    val studyGroups by friendsViewModel.studyGroups.collectAsState()
+
+    // Real-time Chat Conversation view (Direct friend chat or study group chat)
+    if (activeDirectChatFriend != null || activeStudyGroup != null) {
+        BackHandler {
+            friendsViewModel.closeChat()
+        }
+        ChatConversationScreen(
+            friendsViewModel = friendsViewModel,
+            modifier = modifier
+        )
+        return
+    }
+
     val context = LocalContext.current
     val currentUser by friendsViewModel.currentUser.collectAsState()
     val friends by friendsViewModel.friendsList.collectAsState()
@@ -80,6 +99,7 @@ fun FriendsScreen(
 
     var activeSubTab by remember { mutableStateOf(FriendsSubTab.MY_FRIENDS) }
     var showQRScanner by remember { mutableStateOf(false) }
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiToast) {
         uiToast?.let { msg ->
@@ -168,8 +188,18 @@ fun FriendsScreen(
                             friends = friends,
                             friendStatsMap = friendStatsMap,
                             onViewActivity = { friend -> friendsViewModel.selectFriendForDetail(friend) },
+                            onChatWithFriend = { friend -> friendsViewModel.openDirectChat(friend) },
                             onRemoveFriend = { friend -> friendsViewModel.removeFriend(friend.userId) },
                             onSwitchToAddFriend = { activeSubTab = FriendsSubTab.ADD_FRIEND }
+                        )
+                    }
+                    FriendsSubTab.GROUPS -> {
+                        StudyGroupsContent(
+                            studyGroups = studyGroups,
+                            currentUser = currentUser,
+                            onCreateGroupClick = { showCreateGroupDialog = true },
+                            onOpenGroupChat = { group -> friendsViewModel.openGroupChat(group) },
+                            onDeleteGroup = { groupId -> friendsViewModel.deleteStudyGroup(groupId) }
                         )
                     }
                     FriendsSubTab.ADD_FRIEND -> {
@@ -213,6 +243,18 @@ fun FriendsScreen(
                     }
                 }
             }
+        }
+
+        // Create Study Group Dialog
+        if (showCreateGroupDialog) {
+            CreateStudyGroupDialog(
+                friends = friends,
+                onDismiss = { showCreateGroupDialog = false },
+                onCreateGroup = { name, desc, selectedFriends, color ->
+                    friendsViewModel.createStudyGroup(name, desc, selectedFriends, color)
+                    showCreateGroupDialog = false
+                }
+            )
         }
 
         // Friend Detail Activity Modal
@@ -321,6 +363,7 @@ private fun MyFriendsListContent(
     friends: List<UserEntity>,
     friendStatsMap: Map<String, UserStudyStats>,
     onViewActivity: (UserEntity) -> Unit,
+    onChatWithFriend: (UserEntity) -> Unit,
     onRemoveFriend: (UserEntity) -> Unit,
     onSwitchToAddFriend: () -> Unit
 ) {
@@ -457,7 +500,8 @@ private fun MyFriendsListContent(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedButton(
                                 onClick = { onRemoveFriend(friend) },
@@ -467,10 +511,276 @@ private fun MyFriendsListContent(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             Button(
+                                onClick = { onChatWithFriend(friend) },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+                                modifier = Modifier.testTag("chat_friend_${friend.userId}")
+                            ) {
+                                Icon(Icons.Filled.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Chat")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            FilledTonalButton(
                                 onClick = { onViewActivity(friend) },
                                 shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text("View Activity")
+                                Text("Activity")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StudyGroupsContent(
+    studyGroups: List<StudyGroupEntity>,
+    currentUser: UserEntity?,
+    onCreateGroupClick: () -> Unit,
+    onOpenGroupChat: (StudyGroupEntity) -> Unit,
+    onDeleteGroup: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Banner to create a group
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = IndigoPrimary.copy(alpha = 0.12f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(IndigoPrimary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Groups,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Group Study & Live Chat",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Create groups with friends & chat live",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Button(
+                    onClick = onCreateGroupClick,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag("create_study_group_banner_btn")
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New Group")
+                }
+            }
+        }
+
+        if (studyGroups.isEmpty()) {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(32.dp)
+                        .fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.GroupAdd,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(56.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "No study groups yet",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Create a study group, add your study friends, and start real-time messaging!",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onCreateGroupClick,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.testTag("empty_create_group_btn")
+                    ) {
+                        Text("Create Your First Group")
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(studyGroups, key = { it.groupId }) { group ->
+                    val memberCount = group.memberStudyIds.split(",").filter { it.isNotBlank() }.size
+                    val isCreator = currentUser?.userId == group.createdByUserId ||
+                            currentUser?.studyId.equals(group.createdByStudyId, ignoreCase = true)
+
+                    val groupColor = remember(group.colorHex) {
+                        try {
+                            Color(android.graphics.Color.parseColor(group.colorHex))
+                        } catch (e: Exception) {
+                            IndigoPrimary
+                        }
+                    }
+
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenGroupChat(group) }
+                            .testTag("study_group_card_${group.groupId}")
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .clip(CircleShape)
+                                        .background(groupColor),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Groups,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = group.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "$memberCount members • Created by ${group.createdByName}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                Surface(
+                                    color = EmeraldAccent.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Text(
+                                        text = "LIVE 💬",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = EmeraldAccent,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+
+                            if (group.description.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = group.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            if (group.lastMessageText.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = group.lastMessageText,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (isCreator) {
+                                    TextButton(
+                                        onClick = { onDeleteGroup(group.groupId) },
+                                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                    ) {
+                                        Icon(Icons.Filled.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Delete", fontSize = 12.sp)
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.width(1.dp))
+                                }
+
+                                Button(
+                                    onClick = { onOpenGroupChat(group) },
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Icon(Icons.Filled.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Open Chat")
+                                }
                             }
                         }
                     }

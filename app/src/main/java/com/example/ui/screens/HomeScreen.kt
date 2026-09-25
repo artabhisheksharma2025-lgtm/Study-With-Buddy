@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,20 +31,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.StudyGoalEntity
 import com.example.data.model.UserEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
 import com.example.ui.components.AppTab
+import com.example.ui.components.GoalPeriod
 import com.example.ui.components.LiveCameraQRScannerDialog
 import com.example.ui.components.QuickActionButton
+import com.example.ui.components.SetStudyGoalDialog
 import com.example.ui.components.SetWeeklyGoalDialog
 import com.example.ui.components.StatCard
 import com.example.ui.components.StreakCalendarCard
+import com.example.ui.components.StudyGoalTrackerCard
 import com.example.ui.components.WeeklyGoalTrackerCard
 import com.example.ui.theme.EmeraldAccent
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
 import com.example.ui.theme.VioletTertiary
+import com.example.ui.util.GreetingHelper
+import com.example.ui.util.TimeOfDayPeriod
 import com.example.ui.viewmodel.MainViewModel
 import java.util.Calendar
 
@@ -56,6 +64,7 @@ fun HomeScreen(
     onOpenManualSessionDialog: () -> Unit,
     onOpenAddGoalDialog: () -> Unit,
     onScanFriendQR: () -> Unit = {},
+    onOpenGoalsScreen: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -65,19 +74,26 @@ fun HomeScreen(
 
     val recentSessions by mainViewModel.studySessions.collectAsState()
     val goals by mainViewModel.studyGoals.collectAsState()
+    val dailyGoals by mainViewModel.dailyGoals.collectAsState()
+    val weeklyGoals by mainViewModel.weeklyGoals.collectAsState()
+    val dailyGoal by mainViewModel.dailyGoal.collectAsState()
     val weeklyGoal by mainViewModel.weeklyGoal.collectAsState()
 
-    var showSetWeeklyGoalDialog by remember { mutableStateOf(false) }
+    var showSetStudyGoalDialog by remember { mutableStateOf(false) }
+    var selectedGoalPeriod by remember { mutableStateOf(GoalPeriod.DAILY) }
+    var goalToEdit by remember { mutableStateOf<StudyGoalEntity?>(null) }
 
-    // Calculate Greeting based on time of day
-    val greeting = remember {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        when (hour) {
-            in 4..11 -> "Good Morning"
-            in 12..16 -> "Good Afternoon"
-            else -> "Good Evening"
-        }
+    // Accurate Time-of-Day Greeting Logic:
+    // Morning: 5:00 AM – 11:59 AM ("Good morning!", "Morning!", "Rise and shine!")
+    // Afternoon: 12:00 PM – 4:59 PM ("Good afternoon!", "Afternoon!")
+    // Evening: 5:00 PM – 7:59 PM ("Good evening!", "Evening!")
+    // Night: 8:00 PM onwards / Before Bed ("Good night!", "Have a good night!", "Sweet dreams!")
+    val currentPeriod = remember { GreetingHelper.getCurrentPeriod() }
+    var greetingVariantIndex by remember { mutableIntStateOf(0) }
+    val greetingText = remember(greetingVariantIndex, user.fullName) {
+        GreetingHelper.formatGreeting(user.fullName, greetingVariantIndex)
     }
+    var showGreetingInfoDialog by remember { mutableStateOf(false) }
 
     var showNotificationsDialog by remember { mutableStateOf(false) }
 
@@ -94,17 +110,32 @@ fun HomeScreen(
                                 .clip(RoundedCornerShape(10.dp))
                         )
                         Spacer(modifier = Modifier.width(10.dp))
-                        Column {
+                        Column(
+                            modifier = Modifier
+                                .clickable {
+                                    // Tapping cycles through greetings for this period
+                                    greetingVariantIndex = (greetingVariantIndex + 1) % currentPeriod.greetings.size
+                                }
+                                .testTag("home_greeting_header")
+                        ) {
                             Text(
-                                text = "$greeting, ${user.fullName.split(" ").firstOrNull() ?: user.fullName} 👋",
+                                text = greetingText,
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            Text(
-                                text = "Study ID: ${user.studyId}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "Study ID: ${user.studyId}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "• ${currentPeriod.timeRangeDescription}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                )
+                            }
                         }
                     }
                 },
@@ -258,24 +289,26 @@ fun HomeScreen(
                                 .testTag("stat_card_weekly")
                         )
 
-                        // Calculate overall weekly goal progress
-                        val activeWeeklyGoal = weeklyGoal ?: goals.firstOrNull()
-                        val targetMinutes = activeWeeklyGoal?.targetDurationMinutes ?: (20 * 60)
-                        val targetSec = targetMinutes * 60L
-                        val goalProgressPct = if (targetSec > 0) {
-                            ((stats.weeklyTimeSeconds.toFloat() / targetSec.toFloat()) * 100).toInt().coerceAtMost(100)
+                        // Calculate today's daily goal progress
+                        val activeDailyTargetMin = dailyGoal?.targetDurationMinutes ?: (2 * 60)
+                        val dailyTargetSec = activeDailyTargetMin * 60L
+                        val dailyGoalProgressPct = if (dailyTargetSec > 0) {
+                            ((stats.todayTimeSeconds.toFloat() / dailyTargetSec.toFloat()) * 100).toInt().coerceAtMost(100)
                         } else 0
-                        val targetHoursDisplay = (targetMinutes / 60)
+                        val targetHoursDisplay = if (activeDailyTargetMin >= 60) "${activeDailyTargetMin / 60}h" else "${activeDailyTargetMin}m"
 
                         StatCard(
-                            title = "Weekly Goal",
-                            value = "$goalProgressPct%",
-                            subtitle = "${targetHoursDisplay}h Target",
+                            title = "Daily Goal",
+                            value = "$dailyGoalProgressPct%",
+                            subtitle = "${targetHoursDisplay} Target",
                             icon = Icons.Filled.TrackChanges,
                             iconTint = EmeraldAccent,
                             modifier = Modifier
                                 .weight(1f)
-                                .clickable { showSetWeeklyGoalDialog = true }
+                                .clickable {
+                                    selectedGoalPeriod = GoalPeriod.DAILY
+                                    showSetStudyGoalDialog = true
+                                }
                                 .testTag("stat_card_goal")
                         )
                     }
@@ -354,13 +387,57 @@ fun HomeScreen(
                 )
             }
 
-            // Weekly Study Hour Goal Tracker with Progress Bar
+            // Section Header: Study Goals & Targets
             item {
-                WeeklyGoalTrackerCard(
-                    goal = weeklyGoal,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "🎯 Study Goals & Targets",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (onOpenGoalsScreen != null) {
+                        TextButton(
+                            onClick = onOpenGoalsScreen,
+                            modifier = Modifier.testTag("home_view_all_goals_button")
+                        ) {
+                            Text("View All (${dailyGoals.size + weeklyGoals.size})")
+                            Icon(Icons.Filled.ChevronRight, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+
+            // Daily / Weekly Study Goal Tracker with Dynamic Progress Bar
+            item {
+                StudyGoalTrackerCard(
+                    dailyGoals = dailyGoals,
+                    weeklyGoals = weeklyGoals,
+                    dailyGoal = dailyGoal,
+                    weeklyGoal = weeklyGoal,
+                    todayTimeSeconds = stats.todayTimeSeconds,
                     weeklyTimeSeconds = stats.weeklyTimeSeconds,
+                    todaySubjectTimes = stats.todaySubjectTimes,
+                    weeklySubjectTimes = stats.weeklySubjectTimes,
+                    todaySessionsCount = stats.todaySessionsCount,
                     totalSessionsCount = stats.totalSessionsCount,
-                    onOpenSetGoalDialog = { showSetWeeklyGoalDialog = true },
+                    currentStreakDays = stats.currentStreakDays,
+                    onOpenSetGoalDialog = { period ->
+                        goalToEdit = null
+                        selectedGoalPeriod = period
+                        showSetStudyGoalDialog = true
+                    },
+                    onEditGoal = { goal ->
+                        goalToEdit = goal
+                        selectedGoalPeriod = if (goal.goalId.startsWith("daily_") || goal.title.contains("daily", ignoreCase = true) || (goal.endDate - goal.startDate) <= 129600000L) GoalPeriod.DAILY else GoalPeriod.WEEKLY
+                        showSetStudyGoalDialog = true
+                    },
+                    onDeleteGoal = { goal ->
+                        mainViewModel.deleteGoal(goal)
+                    },
                     onStartStudy = { onNavigateTab(AppTab.STUDY) }
                 )
             }
@@ -603,15 +680,47 @@ fun HomeScreen(
             )
         }
 
-        if (showSetWeeklyGoalDialog) {
-            val targetHrs = (weeklyGoal?.targetDurationMinutes ?: (20 * 60)) / 60f
-            SetWeeklyGoalDialog(
-                initialTargetHours = targetHrs,
-                initialTitle = weeklyGoal?.title ?: "Weekly Study Target",
-                onSaveGoal = { hours, title ->
-                    mainViewModel.setWeeklyGoal(hours, title)
+        if (showSetStudyGoalDialog) {
+            val dailyHrs = (dailyGoals.firstOrNull()?.targetDurationMinutes ?: (2 * 60)) / 60f
+            val weeklyHrs = (weeklyGoals.firstOrNull()?.targetDurationMinutes ?: (20 * 60)) / 60f
+
+            SetStudyGoalDialog(
+                initialPeriod = selectedGoalPeriod,
+                initialDailyHours = dailyHrs,
+                initialWeeklyHours = weeklyHrs,
+                initialTitle = if (selectedGoalPeriod == GoalPeriod.DAILY) dailyGoal?.title ?: "Daily Study Target" else weeklyGoal?.title ?: "Weekly Study Target",
+                subjects = mainViewModel.subjects.collectAsState().value,
+                goalToEdit = goalToEdit,
+                onSaveGoalDetailed = { period, hours, title, subjectName, goalId ->
+                    if (period == GoalPeriod.DAILY) {
+                        mainViewModel.addOrUpdateDailyGoal(
+                            title = title,
+                            targetHours = hours,
+                            subjectName = subjectName,
+                            goalId = goalId
+                        )
+                    } else {
+                        mainViewModel.addOrUpdateWeeklyGoal(
+                            title = title,
+                            targetHours = hours,
+                            subjectName = subjectName,
+                            goalId = goalId
+                        )
+                    }
+                    goalToEdit = null
                 },
-                onDismiss = { showSetWeeklyGoalDialog = false }
+                onSaveGoal = { period, hours, title ->
+                    if (period == GoalPeriod.DAILY) {
+                        mainViewModel.setDailyGoal(hours, title)
+                    } else {
+                        mainViewModel.setWeeklyGoal(hours, title)
+                    }
+                    goalToEdit = null
+                },
+                onDismiss = {
+                    showSetStudyGoalDialog = false
+                    goalToEdit = null
+                }
             )
         }
     }

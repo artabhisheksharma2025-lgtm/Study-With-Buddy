@@ -17,7 +17,9 @@ data class UserStudyStats(
     val mostStudiedSubject: String = "None",
     val subjectBreakdown: List<SubjectStat> = emptyList(),
     val dailyActivity: Map<String, Long> = emptyMap(), // "Mon" -> seconds
-    val activeDates: Set<String> = emptySet() // "YYYY-MM-DD"
+    val activeDates: Set<String> = emptySet(), // "YYYY-MM-DD"
+    val todaySubjectTimes: Map<String, Long> = emptyMap(),
+    val weeklySubjectTimes: Map<String, Long> = emptyMap()
 )
 
 data class SubjectStat(
@@ -69,6 +71,8 @@ object StatsCalculator {
         val subjectLastDateMap = mutableMapOf<String, String>()
 
         val activeDatesSet = mutableSetOf<String>()
+        val todaySubjectMap = mutableMapOf<String, Long>()
+        val weeklySubjectMap = mutableMapOf<String, Long>()
 
         // For weekly graph (Last 7 days: Mon, Tue...)
         val daysOfWeekList = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -80,16 +84,19 @@ object StatsCalculator {
             val duration = session.durationSeconds
             totalTime += duration
             activeDatesSet.add(session.sessionDate)
+            val subName = session.subjectName.ifBlank { "Other" }
 
             // Today
             if (session.sessionDate == todayStr) {
                 todayTime += duration
                 todayCount++
+                todaySubjectMap[subName] = (todaySubjectMap[subName] ?: 0L) + duration
             }
 
             // Weekly
             if (session.endTime >= weekAgoMillis) {
                 weeklyTime += duration
+                weeklySubjectMap[subName] = (weeklySubjectMap[subName] ?: 0L) + duration
                 val dayName = dayOfWeekFormat.format(Date(session.endTime))
                 if (dailyMap.containsKey(dayName)) {
                     dailyMap[dayName] = (dailyMap[dayName] ?: 0L) + duration
@@ -102,7 +109,6 @@ object StatsCalculator {
             }
 
             // Subject grouping
-            val subName = session.subjectName.ifBlank { "Other" }
             subjectTimeMap[subName] = (subjectTimeMap[subName] ?: 0L) + duration
             subjectCountMap[subName] = (subjectCountMap[subName] ?: 0) + 1
 
@@ -145,7 +151,9 @@ object StatsCalculator {
             mostStudiedSubject = mostStudied,
             subjectBreakdown = subjectStatsList,
             dailyActivity = dailyMap,
-            activeDates = activeDatesSet
+            activeDates = activeDatesSet,
+            todaySubjectTimes = todaySubjectMap,
+            weeklySubjectTimes = weeklySubjectMap
         )
     }
 

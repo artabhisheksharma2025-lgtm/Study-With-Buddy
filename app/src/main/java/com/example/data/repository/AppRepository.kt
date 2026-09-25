@@ -24,6 +24,8 @@ class AppRepository(private val db: AppDatabase) {
     private val notificationDao = db.notificationDao()
     private val dismissedAnnouncementDao = db.dismissedAnnouncementDao()
     private val announcementDao = db.announcementDao()
+    private val chatDao = db.chatDao()
+    private val groupDao = db.studyGroupDao()
 
     val loggedInUserFlow: Flow<UserEntity?> = userDao.getLoggedInUserFlow().map { user ->
         if (user != null && (user.accountStatus == "SUSPENDED" || user.accountStatus == "DISABLED" || user.isDeleted)) {
@@ -66,11 +68,49 @@ class AppRepository(private val db: AppDatabase) {
                 }
             }
 
-            // 2. Keep active user profile synced
+            // 2. Keep active user profile in sync with cloud updates (e.g. password/status changed by Admin)
             val currentUser = userDao.getLoggedInUser()
-            if (currentUser != null && !currentUser.isDeleted) {
+            if (currentUser != null) {
+                val cloudUser = OnlineSyncService.findUserAuthByEmail(currentUser.email)
+                    ?: OnlineSyncService.fetchUserAuthById(currentUser.userId)
+
+                if (cloudUser != null) {
+                    if (cloudUser.isDeleted || cloudUser.accountStatus == "SUSPENDED" || cloudUser.accountStatus == "DISABLED") {
+                        // User has been suspended, disabled, or deleted by Admin -> log them out immediately
+                        val updated = currentUser.copy(
+                            isLoggedIn = false,
+                            accountStatus = cloudUser.accountStatus,
+                            isDeleted = cloudUser.isDeleted,
+                            suspensionReason = cloudUser.suspensionReason
+                        )
+                        userDao.updateUser(updated)
+                    } else if (cloudUser.passwordHash != currentUser.passwordHash ||
+                        cloudUser.fullName != currentUser.fullName ||
+                        cloudUser.studyId != currentUser.studyId ||
+                        cloudUser.accountStatus != currentUser.accountStatus
+                    ) {
+                        // Admin updated user password, full name, study ID, or status -> update local record
+                        userDao.updateUser(
+                            currentUser.copy(
+                                fullName = cloudUser.fullName,
+                                passwordHash = cloudUser.passwordHash,
+                                studyId = cloudUser.studyId,
+                                accountStatus = cloudUser.accountStatus,
+                                isDeleted = cloudUser.isDeleted
+                            )
+                        )
+                    }
+                }
+
+                // Keep stats & active status synced online without overriding cloud auth password
                 OnlineSyncService.syncUserOnline(currentUser, getStudyStatsForUser(currentUser.userId))
-                OnlineSyncService.syncUserAuthOnline(currentUser)
+
+                // Sync user's study groups from cloud
+                try {
+                    syncUserStudyGroups(currentUser.studyId)
+                } catch (e: Exception) {
+                    Log.w("AppRepository", "Error syncing user study groups in background", e)
+                }
             }
         } catch (e: Exception) {
             Log.e("AppRepository", "Error during cloud sync", e)
@@ -111,34 +151,55 @@ class AppRepository(private val db: AppDatabase) {
         email: String,
         passwordHash: String
     ): Result<UserEntity> = withContext(Dispatchers.IO) {
-        val existingEmail = userDao.getUserByEmail(email)
-        if (existingEmail != null) {
-            return@withContext Result.failure(Exception("Email address already registered."))
+        val cleanEmail = email.trim()
+        val cleanPassword = passwordHash.trim()
+
+        // 1. Check local database first
+        val existingLocal = userDao.getUserByEmail(cleanEmail)
+        if (existingLocal != null && !existingLocal.isDeleted) {
+            return@withContext Result.failure(Exception("An account with this email already exists. Please log in."))
+        }
+
+        // 2. Check cloud database across any device
+        try {
+            val existingOnline = OnlineSyncService.findUserAuthByEmail(cleanEmail)
+            if (existingOnline != null && !existingOnline.isDeleted) {
+                // Account exists on another phone/device -> save to local DB and guide user to log in
+                userDao.insertUser(existingOnline)
+                return@withContext Result.failure(Exception("An account with this email already exists online. Please log in with your password."))
+            }
+        } catch (e: Exception) {
+            Log.w("AppRepository", "Cloud check skipped during registration due to network", e)
         }
 
         val studyId = generateUniqueStudyId()
         val userId = "user_" + UUID.randomUUID().toString().take(8)
 
-        // Logout existing users first
+        // Logout any currently logged-in user first
         userDao.logoutAllUsers()
 
         val newUser = UserEntity(
             userId = userId,
             fullName = fullName.trim(),
             username = username.trim(),
-            email = email.trim(),
-            passwordHash = passwordHash,
+            email = cleanEmail,
+            passwordHash = cleanPassword,
             studyId = studyId,
             isLoggedIn = true,
-            joinedDate = System.currentTimeMillis()
+            joinedDate = System.currentTimeMillis(),
+            lastActiveTime = System.currentTimeMillis()
         )
 
         userDao.insertUser(newUser)
         seedDefaultSubjectsForUser(userId)
 
-        // Sync new user credentials and profile to cloud for Admin management
-        OnlineSyncService.syncUserAuthOnline(newUser)
-        OnlineSyncService.syncUserOnline(newUser, getStudyStatsForUser(userId))
+        // Sync new user credentials and profile to cloud for cross-device multi-phone login & Admin management
+        try {
+            OnlineSyncService.syncUserAuthOnline(newUser)
+            OnlineSyncService.syncUserOnline(newUser, getStudyStatsForUser(userId))
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync new user to cloud", e)
+        }
 
         // Create welcome notification
         notificationDao.insertNotification(
@@ -155,46 +216,95 @@ class AppRepository(private val db: AppDatabase) {
 
     suspend fun loginUser(email: String, passwordHash: String): Result<UserEntity> =
         withContext(Dispatchers.IO) {
-            var user = userDao.getUserByEmail(email.trim())
-            if (user == null) {
-                // If user registered on another device/session, check global cloud auth directory
-                val onlineUsers = OnlineSyncService.fetchAllOnlineAuthUsers()
-                val match = onlineUsers.find { it.email.equals(email.trim(), ignoreCase = true) }
-                if (match != null) {
-                    userDao.insertUser(match)
-                    seedDefaultSubjectsForUser(match.userId)
-                    user = match
+            val cleanEmail = email.trim()
+            val cleanPassword = passwordHash.trim()
+
+            // 1. Check cloud FIRST for the most up-to-date credentials (including Admin changed password)
+            var cloudUser: UserEntity? = null
+            try {
+                cloudUser = OnlineSyncService.findUserAuthByEmail(cleanEmail)
+            } catch (e: Exception) {
+                Log.w("AppRepository", "Cloud lookup failed during login", e)
+            }
+
+            if (cloudUser != null) {
+                if (cloudUser.isDeleted) {
+                    return@withContext Result.failure(Exception("This account has been deleted by an administrator."))
                 }
+
+                if (cloudUser.accountStatus == "SUSPENDED") {
+                    val reason = if (cloudUser.suspensionReason.isNotBlank()) " Reason: ${cloudUser.suspensionReason}" else ""
+                    return@withContext Result.failure(Exception("This account has been suspended by an administrator.$reason"))
+                }
+
+                if (cloudUser.accountStatus == "DISABLED") {
+                    return@withContext Result.failure(Exception("This account has been disabled by an administrator."))
+                }
+
+                // Verify password against cloud (handles Admin password resets and cross-device signups)
+                if (cloudUser.passwordHash != cleanPassword) {
+                    return@withContext Result.failure(Exception("Incorrect password. Please try again."))
+                }
+
+                // Password verified! Log user in
+                userDao.logoutAllUsers()
+
+                val localExisting = userDao.getUserById(cloudUser.userId) ?: userDao.getUserByEmail(cleanEmail)
+                val userToSave = cloudUser.copy(
+                    isLoggedIn = true,
+                    lastActiveTime = System.currentTimeMillis()
+                )
+
+                if (localExisting != null) {
+                    userDao.updateUser(userToSave)
+                } else {
+                    userDao.insertUser(userToSave)
+                    seedDefaultSubjectsForUser(userToSave.userId)
+                }
+
+                // Keep cloud presence and online active
+                OnlineSyncService.syncUserOnline(userToSave, getStudyStatsForUser(userToSave.userId))
+
+                return@withContext Result.success(userToSave)
             }
 
-            if (user == null) {
-                return@withContext Result.failure(Exception("Account not found with this email."))
+            // 2. Fallback to local Room database if offline (no internet) or created offline
+            val localUser = userDao.getUserByEmail(cleanEmail)
+            if (localUser == null) {
+                return@withContext Result.failure(Exception("Account not found with this email. Please check your email or sign up."))
             }
 
-            if (user.isDeleted) {
+            if (localUser.isDeleted) {
                 return@withContext Result.failure(Exception("This account has been deleted."))
             }
 
-            if (user.accountStatus == "SUSPENDED") {
-                val reason = if (user.suspensionReason.isNotBlank()) " Reason: ${user.suspensionReason}" else ""
+            if (localUser.accountStatus == "SUSPENDED") {
+                val reason = if (localUser.suspensionReason.isNotBlank()) " Reason: ${localUser.suspensionReason}" else ""
                 return@withContext Result.failure(Exception("This account has been suspended by an administrator.$reason"))
             }
 
-            if (user.accountStatus == "DISABLED") {
+            if (localUser.accountStatus == "DISABLED") {
                 return@withContext Result.failure(Exception("This account has been disabled by an administrator."))
             }
 
-            if (user.passwordHash != passwordHash) {
+            if (localUser.passwordHash != cleanPassword) {
                 return@withContext Result.failure(Exception("Incorrect password. Please try again."))
             }
 
             userDao.logoutAllUsers()
-            val updatedUser = user.copy(isLoggedIn = true)
+            val updatedUser = localUser.copy(
+                isLoggedIn = true,
+                lastActiveTime = System.currentTimeMillis()
+            )
             userDao.updateUser(updatedUser)
 
-            // Keep cloud presence and auth active
-            OnlineSyncService.syncUserAuthOnline(updatedUser)
-            OnlineSyncService.syncUserOnline(updatedUser, getStudyStatsForUser(updatedUser.userId))
+            // Try to sync credentials and presence to cloud if internet becomes available
+            try {
+                OnlineSyncService.syncUserAuthOnline(updatedUser)
+                OnlineSyncService.syncUserOnline(updatedUser, getStudyStatsForUser(updatedUser.userId))
+            } catch (e: Exception) {
+                Log.w("AppRepository", "Failed to sync to cloud during offline login fallback", e)
+            }
 
             Result.success(updatedUser)
         }
@@ -600,10 +710,49 @@ class AppRepository(private val db: AppDatabase) {
         goalDao.deleteGoal(goal)
     }
 
+    suspend fun setDailyGoal(
+        userId: String,
+        targetHours: Float,
+        title: String = "Daily Study Target",
+        goalId: String? = null,
+        subjectName: String = ""
+    ): StudyGoalEntity = withContext(Dispatchers.IO) {
+        val targetMinutes = (targetHours * 60).toInt().coerceAtLeast(10)
+        val now = System.currentTimeMillis()
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val startOfDay = cal.timeInMillis
+
+        cal.set(Calendar.HOUR_OF_DAY, 23)
+        cal.set(Calendar.MINUTE, 59)
+        cal.set(Calendar.SECOND, 59)
+        val endOfDay = cal.timeInMillis
+
+        val id = goalId ?: "daily_goal_${userId}_${UUID.randomUUID().toString().take(6)}"
+        val goal = StudyGoalEntity(
+            goalId = id,
+            userId = userId,
+            title = title.ifBlank { "Daily Study Target" },
+            targetDurationMinutes = targetMinutes,
+            targetSessions = (targetHours / 1f).toInt().coerceAtLeast(1),
+            startDate = startOfDay,
+            endDate = endOfDay,
+            subjectName = subjectName.trim(),
+            createdAt = now
+        )
+        goalDao.insertGoal(goal)
+        goal
+    }
+
     suspend fun setWeeklyGoal(
         userId: String,
         targetHours: Float,
-        title: String = "Weekly Study Target"
+        title: String = "Weekly Study Target",
+        goalId: String? = null,
+        subjectName: String = ""
     ): StudyGoalEntity = withContext(Dispatchers.IO) {
         val targetMinutes = (targetHours * 60).toInt()
         val now = System.currentTimeMillis()
@@ -622,16 +771,16 @@ class AppRepository(private val db: AppDatabase) {
         cal.set(Calendar.SECOND, 59)
         val endOfWeek = cal.timeInMillis
 
-        val goalId = "weekly_goal_${userId}"
+        val id = goalId ?: "weekly_goal_${userId}_${UUID.randomUUID().toString().take(6)}"
         val goal = StudyGoalEntity(
-            goalId = goalId,
+            goalId = id,
             userId = userId,
             title = title.ifBlank { "Weekly Study Target" },
             targetDurationMinutes = targetMinutes,
             targetSessions = (targetHours / 2f).toInt().coerceAtLeast(3),
             startDate = startOfWeek,
             endDate = endOfWeek,
-            subjectName = "",
+            subjectName = subjectName.trim(),
             createdAt = now
         )
         goalDao.insertGoal(goal)
@@ -707,5 +856,145 @@ class AppRepository(private val db: AppDatabase) {
 
     suspend fun getDismissedAnnouncementIds(userId: String): List<String> = withContext(Dispatchers.IO) {
         dismissedAnnouncementDao.getDismissedAnnouncementIds(userId)
+    }
+
+    // --- Chat & Study Group Messaging ---
+
+    fun getDirectChannelId(studyId1: String, studyId2: String): String {
+        val s1 = studyId1.trim().uppercase()
+        val s2 = studyId2.trim().uppercase()
+        return if (s1 <= s2) "dm_${s1}_${s2}" else "dm_${s2}_${s1}"
+    }
+
+    fun getMessagesForChannelFlow(channelId: String): Flow<List<ChatMessageEntity>> =
+        chatDao.getMessagesForChannelFlow(channelId)
+
+    suspend fun getMessagesForChannel(channelId: String): List<ChatMessageEntity> = withContext(Dispatchers.IO) {
+        chatDao.getMessagesForChannel(channelId)
+    }
+
+    suspend fun sendChatMessage(
+        channelId: String,
+        sender: UserEntity,
+        text: String,
+        isGroup: Boolean = false,
+        groupId: String? = null
+    ): ChatMessageEntity = withContext(Dispatchers.IO) {
+        val message = ChatMessageEntity(
+            messageId = "msg_" + UUID.randomUUID().toString().take(12),
+            channelId = channelId,
+            senderUserId = sender.userId,
+            senderName = sender.fullName,
+            senderStudyId = sender.studyId,
+            text = text.trim(),
+            timestamp = System.currentTimeMillis(),
+            isGroup = isGroup,
+            groupId = groupId,
+            isRead = true
+        )
+
+        // Save locally in Room
+        chatDao.insertMessage(message)
+
+        // If in a study group, update group's last message
+        if (isGroup && groupId != null) {
+            val group = groupDao.getGroupById(groupId)
+            if (group != null) {
+                val updatedGroup = group.copy(
+                    lastMessageText = "${sender.fullName.take(12)}: ${text.trim().take(40)}",
+                    lastMessageTime = message.timestamp
+                )
+                groupDao.updateGroup(updatedGroup)
+                OnlineSyncService.syncStudyGroupOnline(updatedGroup)
+            }
+        }
+
+        // Send to cloud in background
+        OnlineSyncService.sendChatMessageOnline(message)
+
+        message
+    }
+
+    suspend fun syncChannelMessages(channelId: String, isGroup: Boolean = false): List<ChatMessageEntity> =
+        withContext(Dispatchers.IO) {
+            val onlineMsgs = OnlineSyncService.fetchChatMessagesOnline(channelId, isGroup)
+            if (onlineMsgs.isNotEmpty()) {
+                chatDao.insertMessages(onlineMsgs)
+            }
+            chatDao.getMessagesForChannel(channelId)
+        }
+
+    fun getStudyGroupsFlow(): Flow<List<StudyGroupEntity>> = groupDao.getAllGroupsFlow()
+
+    suspend fun getStudyGroupById(groupId: String): StudyGroupEntity? = withContext(Dispatchers.IO) {
+        groupDao.getGroupById(groupId)
+    }
+
+    suspend fun createStudyGroup(
+        creator: UserEntity,
+        name: String,
+        description: String,
+        selectedFriends: List<UserEntity>,
+        colorHex: String = "#3F51B5",
+        iconName: String = "groups"
+    ): StudyGroupEntity = withContext(Dispatchers.IO) {
+        val allMembers = (listOf(creator) + selectedFriends).distinctBy { it.userId }
+        val groupId = "grp_" + UUID.randomUUID().toString().take(8)
+
+        val newGroup = StudyGroupEntity(
+            groupId = groupId,
+            name = name.trim(),
+            description = description.trim(),
+            createdByUserId = creator.userId,
+            createdByName = creator.fullName,
+            createdByStudyId = creator.studyId,
+            createdAt = System.currentTimeMillis(),
+            memberUserIds = allMembers.joinToString(",") { it.userId },
+            memberStudyIds = allMembers.joinToString(",") { it.studyId },
+            memberNames = allMembers.joinToString(",") { it.fullName },
+            iconName = iconName,
+            colorHex = colorHex,
+            lastMessageText = "Group created 🎉",
+            lastMessageTime = System.currentTimeMillis()
+        )
+
+        groupDao.insertGroup(newGroup)
+        OnlineSyncService.syncStudyGroupOnline(newGroup)
+
+        // Send welcome announcement message in group chat
+        val welcomeMsg = ChatMessageEntity(
+            messageId = "msg_welcome_$groupId",
+            channelId = groupId,
+            senderUserId = creator.userId,
+            senderName = creator.fullName,
+            senderStudyId = creator.studyId,
+            text = "Welcome to ${name.trim()}! Study goals and chat started 📚✨",
+            timestamp = System.currentTimeMillis(),
+            isGroup = true,
+            groupId = groupId,
+            isRead = true
+        )
+        chatDao.insertMessage(welcomeMsg)
+        OnlineSyncService.sendChatMessageOnline(welcomeMsg)
+
+        newGroup
+    }
+
+    suspend fun syncUserStudyGroups(userStudyId: String): List<StudyGroupEntity> = withContext(Dispatchers.IO) {
+        val onlineGroups = OnlineSyncService.fetchGroupsForUserOnline(userStudyId)
+        if (onlineGroups.isNotEmpty()) {
+            groupDao.insertGroups(onlineGroups)
+        }
+        onlineGroups
+    }
+
+    suspend fun deleteStudyGroup(groupId: String) = withContext(Dispatchers.IO) {
+        groupDao.deleteGroupById(groupId)
+        chatDao.deleteMessagesForChannel(groupId)
+        try {
+            OnlineSyncService.deleteStudyGroupOnline(groupId)
+        } catch (e: Exception) {
+            Log.w("AppRepository", "Error deleting study group online", e)
+        }
     }
 }

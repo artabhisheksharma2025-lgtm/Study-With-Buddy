@@ -1,18 +1,16 @@
 package com.example.ui.components
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,60 +28,32 @@ import com.example.ui.theme.IndigoPrimary
 import java.util.Calendar
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WeeklyGoalTrackerCard(
-    goal: StudyGoalEntity?,
-    weeklyTimeSeconds: Long,
-    totalSessionsCount: Int,
-    onOpenSetGoalDialog: () -> Unit,
+fun StudyGoalTrackerCard(
+    dailyGoals: List<StudyGoalEntity> = emptyList(),
+    weeklyGoals: List<StudyGoalEntity> = emptyList(),
+    dailyGoal: StudyGoalEntity? = null,
+    weeklyGoal: StudyGoalEntity? = null,
+    todayTimeSeconds: Long = 0L,
+    weeklyTimeSeconds: Long = 0L,
+    todaySubjectTimes: Map<String, Long> = emptyMap(),
+    weeklySubjectTimes: Map<String, Long> = emptyMap(),
+    todaySessionsCount: Int = 0,
+    totalSessionsCount: Int = 0,
+    currentStreakDays: Int = 0,
+    initialPeriod: GoalPeriod = GoalPeriod.DAILY,
+    onOpenSetGoalDialog: (GoalPeriod) -> Unit,
+    onEditGoal: ((StudyGoalEntity) -> Unit)? = null,
+    onDeleteGoal: ((StudyGoalEntity) -> Unit)? = null,
     onStartStudy: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val targetMinutes = goal?.targetDurationMinutes ?: (20 * 60) // default 20h if unset
-    val targetSec = targetMinutes * 60L
-    val targetHours = targetMinutes / 60f
-    val currentHours = weeklyTimeSeconds / 3600f
+    var selectedPeriod by remember { mutableStateOf(initialPeriod) }
 
-    val progressFraction = if (targetSec > 0) {
-        (weeklyTimeSeconds.toFloat() / targetSec.toFloat()).coerceAtLeast(0f)
-    } else 0f
-
-    val clampedProgress = progressFraction.coerceIn(0f, 1f)
-    val animatedProgress by animateFloatAsState(
-        targetValue = clampedProgress,
-        animationSpec = tween(durationMillis = 800),
-        label = "weekly_goal_progress"
-    )
-
-    val percentage = (progressFraction * 100).toInt()
-    val remainingSec = (targetSec - weeklyTimeSeconds).coerceAtLeast(0L)
-
-    // Calculate days remaining in the current week (Sunday = 1, Saturday = 7)
-    val cal = Calendar.getInstance()
-    val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
-    // Days until Sunday:
-    val daysRemainingInWeek = when (dayOfWeek) {
-        Calendar.MONDAY -> 7
-        Calendar.TUESDAY -> 6
-        Calendar.WEDNESDAY -> 5
-        Calendar.THURSDAY -> 4
-        Calendar.FRIDAY -> 3
-        Calendar.SATURDAY -> 2
-        Calendar.SUNDAY -> 1
-        else -> 3
-    }
-
-    val dailyHoursNeeded = if (remainingSec > 0 && daysRemainingInWeek > 0) {
-        (remainingSec / 3600f) / daysRemainingInWeek
-    } else 0f
-
-    // Theme & Status Badge
-    val (statusLabel, statusColor, statusBg) = when {
-        percentage >= 100 -> Triple("🎉 Goal Crushed!", EmeraldAccent, Color(0xFFDCFCE7))
-        percentage >= 75 -> Triple("🔥 Almost There!", Color(0xFF0D9488), Color(0xFFCCFBF1))
-        percentage >= 40 -> Triple("⚡ On Track", IndigoPrimary, Color(0xFFE0E7FF))
-        else -> Triple("💪 Keep Going", FlameOrange, Color(0xFFFFEDD5))
-    }
+    // Combine list or fallback to single goal
+    val effectiveDailyGoals = if (dailyGoals.isNotEmpty()) dailyGoals else listOfNotNull(dailyGoal)
+    val effectiveWeeklyGoals = if (weeklyGoals.isNotEmpty()) weeklyGoals else listOfNotNull(weeklyGoal)
 
     Card(
         shape = RoundedCornerShape(22.dp),
@@ -91,52 +61,398 @@ fun WeeklyGoalTrackerCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = modifier
             .fillMaxWidth()
-            .testTag("weekly_goal_tracker_card")
+            .testTag("study_goal_tracker_card")
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(18.dp)
         ) {
-            // Header Row: Title, Badge & Edit Target Button
+            // Period Toggle: [ ☀️ Daily Goals (count) ]  [ 📅 Weekly Goals (count) ]
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 14.dp)
+            ) {
+                SegmentedButton(
+                    selected = selectedPeriod == GoalPeriod.DAILY,
+                    onClick = { selectedPeriod = GoalPeriod.DAILY },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    modifier = Modifier.testTag("goal_tracker_tab_daily")
+                ) {
+                    val countStr = if (effectiveDailyGoals.isNotEmpty()) " (${effectiveDailyGoals.size})" else ""
+                    Text("☀️ Daily Goals$countStr", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                SegmentedButton(
+                    selected = selectedPeriod == GoalPeriod.WEEKLY,
+                    onClick = { selectedPeriod = GoalPeriod.WEEKLY },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    modifier = Modifier.testTag("goal_tracker_tab_weekly")
+                ) {
+                    val countStr = if (effectiveWeeklyGoals.isNotEmpty()) " (${effectiveWeeklyGoals.size})" else ""
+                    Text("📅 Weekly Goals$countStr", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            AnimatedContent(
+                targetState = selectedPeriod,
+                label = "goal_period_content"
+            ) { period ->
+                if (period == GoalPeriod.DAILY) {
+                    MultipleDailyGoalsContent(
+                        goals = effectiveDailyGoals,
+                        todayTimeSeconds = todayTimeSeconds,
+                        todaySubjectTimes = todaySubjectTimes,
+                        todaySessionsCount = todaySessionsCount,
+                        currentStreakDays = currentStreakDays,
+                        onAddNewGoal = { onOpenSetGoalDialog(GoalPeriod.DAILY) },
+                        onEditGoal = onEditGoal ?: { onOpenSetGoalDialog(GoalPeriod.DAILY) },
+                        onDeleteGoal = onDeleteGoal,
+                        onStartStudy = onStartStudy
+                    )
+                } else {
+                    MultipleWeeklyGoalsContent(
+                        goals = effectiveWeeklyGoals,
+                        weeklyTimeSeconds = weeklyTimeSeconds,
+                        weeklySubjectTimes = weeklySubjectTimes,
+                        totalSessionsCount = totalSessionsCount,
+                        onAddNewGoal = { onOpenSetGoalDialog(GoalPeriod.WEEKLY) },
+                        onEditGoal = onEditGoal ?: { onOpenSetGoalDialog(GoalPeriod.WEEKLY) },
+                        onDeleteGoal = onDeleteGoal,
+                        onStartStudy = onStartStudy
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MultipleDailyGoalsContent(
+    goals: List<StudyGoalEntity>,
+    todayTimeSeconds: Long,
+    todaySubjectTimes: Map<String, Long>,
+    todaySessionsCount: Int,
+    currentStreakDays: Int,
+    onAddNewGoal: () -> Unit,
+    onEditGoal: (StudyGoalEntity) -> Unit,
+    onDeleteGoal: ((StudyGoalEntity) -> Unit)?,
+    onStartStudy: (() -> Unit)?
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Header with "+ Add Daily Goal" action
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(IndigoPrimary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.WbSunny,
+                        contentDescription = null,
+                        tint = IndigoPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = "Today's Study Targets",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${AppRepository.formatDurationShort(todayTimeSeconds)} studied today • $todaySessionsCount sessions",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            FilledTonalButton(
+                onClick = onAddNewGoal,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("add_daily_goal_button")
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Add Goal", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (goals.isEmpty()) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Filled.Flag, contentDescription = null, tint = IndigoPrimary, modifier = Modifier.size(32.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("No daily goals created yet", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "Set daily targets (e.g. 1h Math, 2h Focus) to stay consistent.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(onClick = onAddNewGoal, shape = RoundedCornerShape(10.dp)) {
+                        Text("+ Create First Daily Goal")
+                    }
+                }
+            }
+        } else {
+            // Render each daily goal with its own progress bar
+            goals.forEach { goal ->
+                val currentSec = if (goal.subjectName.isNotBlank()) {
+                    todaySubjectTimes[goal.subjectName] ?: 0L
+                } else {
+                    todayTimeSeconds
+                }
+                SingleGoalProgressBarItem(
+                    goal = goal,
+                    currentSeconds = currentSec,
+                    isDaily = true,
+                    onEdit = { onEditGoal(goal) },
+                    onDelete = if (onDeleteGoal != null) { { onDeleteGoal(goal) } } else null
+                )
+            }
+        }
+
+        if (onStartStudy != null) {
+            Button(
+                onClick = onStartStudy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Start Studying Now", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MultipleWeeklyGoalsContent(
+    goals: List<StudyGoalEntity>,
+    weeklyTimeSeconds: Long,
+    weeklySubjectTimes: Map<String, Long>,
+    totalSessionsCount: Int,
+    onAddNewGoal: () -> Unit,
+    onEditGoal: (StudyGoalEntity) -> Unit,
+    onDeleteGoal: ((StudyGoalEntity) -> Unit)?,
+    onStartStudy: (() -> Unit)?
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Header with "+ Add Weekly Goal" action
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(IndigoPrimary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.DateRange,
+                        contentDescription = null,
+                        tint = IndigoPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = "Weekly Study Targets",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${AppRepository.formatDurationShort(weeklyTimeSeconds)} studied this week",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            FilledTonalButton(
+                onClick = onAddNewGoal,
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("add_weekly_goal_button")
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Add Goal", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        if (goals.isEmpty()) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Filled.TrackChanges, contentDescription = null, tint = IndigoPrimary, modifier = Modifier.size(32.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("No weekly goals created yet", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(
+                        "Set weekly targets (e.g. 20h Overall, 8h Chemistry) to hit your milestones.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(onClick = onAddNewGoal, shape = RoundedCornerShape(10.dp)) {
+                        Text("+ Create First Weekly Goal")
+                    }
+                }
+            }
+        } else {
+            // Render each weekly goal with its own progress bar
+            goals.forEach { goal ->
+                val currentSec = if (goal.subjectName.isNotBlank()) {
+                    weeklySubjectTimes[goal.subjectName] ?: 0L
+                } else {
+                    weeklyTimeSeconds
+                }
+                SingleGoalProgressBarItem(
+                    goal = goal,
+                    currentSeconds = currentSec,
+                    isDaily = false,
+                    onEdit = { onEditGoal(goal) },
+                    onDelete = if (onDeleteGoal != null) { { onDeleteGoal(goal) } } else null
+                )
+            }
+        }
+
+        if (onStartStudy != null) {
+            Button(
+                onClick = onStartStudy,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Start Studying Now", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun SingleGoalProgressBarItem(
+    goal: StudyGoalEntity,
+    currentSeconds: Long,
+    isDaily: Boolean,
+    onEdit: () -> Unit,
+    onDelete: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val targetMinutes = goal.targetDurationMinutes.coerceAtLeast(10)
+    val targetSec = targetMinutes * 60L
+    val targetHours = targetMinutes / 60f
+    val currentHours = currentSeconds / 3600f
+
+    val progressFraction = if (targetSec > 0) {
+        (currentSeconds.toFloat() / targetSec.toFloat()).coerceAtLeast(0f)
+    } else 0f
+    val clampedProgress = progressFraction.coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(
+        targetValue = clampedProgress,
+        animationSpec = tween(durationMillis = 700),
+        label = "goal_item_progress_${goal.goalId}"
+    )
+
+    val percentage = (progressFraction * 100).toInt()
+    val remainingSec = (targetSec - currentSeconds).coerceAtLeast(0L)
+
+    val (statusLabel, statusColor, statusBg) = when {
+        percentage >= 100 -> Triple("🎉 Completed!", EmeraldAccent, Color(0xFFDCFCE7))
+        percentage >= 75 -> Triple("🔥 Almost There!", Color(0xFF0D9488), Color(0xFFCCFBF1))
+        percentage >= 40 -> Triple("⚡ On Track", IndigoPrimary, Color(0xFFE0E7FF))
+        else -> Triple("💪 In Progress", FlameOrange, Color(0xFFFFEDD5))
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("goal_item_${goal.goalId}")
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Title & Subject Badge & Actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(IndigoPrimary.copy(alpha = 0.12f)),
-                        contentAlignment = Alignment.Center
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.TrackChanges,
-                            contentDescription = null,
-                            tint = IndigoPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Column {
                         Text(
-                            text = "Weekly Study Goal",
-                            style = MaterialTheme.typography.titleMedium,
+                            text = goal.title,
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = goal?.title ?: "Target: ${targetHours.toInt()} Hours / Week",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (goal.subjectName.isNotBlank()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = goal.subjectName,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
+
+                    Text(
+                        text = if (percentage >= 100) "Goal crushed! 🎉"
+                        else if (isDaily) "${AppRepository.formatDurationShort(remainingSec)} remaining today"
+                        else "${AppRepository.formatDurationShort(remainingSec)} left this week",
+                        fontSize = 11.sp,
+                        color = if (percentage >= 100) EmeraldAccent else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Surface(
                         color = statusBg,
                         shape = RoundedCornerShape(8.dp)
@@ -144,83 +460,82 @@ fun WeeklyGoalTrackerCard(
                         Text(
                             text = statusLabel,
                             color = statusColor,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
 
                     IconButton(
-                        onClick = onOpenSetGoalDialog,
+                        onClick = onEdit,
                         modifier = Modifier
-                            .size(36.dp)
-                            .testTag("edit_weekly_goal_btn")
+                            .size(30.dp)
+                            .testTag("edit_goal_${goal.goalId}")
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Edit,
-                            contentDescription = "Edit Weekly Goal",
+                            contentDescription = "Edit Goal",
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(15.dp)
                         )
+                    }
+
+                    if (onDelete != null) {
+                        IconButton(
+                            onClick = onDelete,
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("delete_goal_${goal.goalId}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Delete,
+                                contentDescription = "Delete Goal",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Main Numbers: Current Studied Hours vs Target & Percentage
+            // Studied vs Target & Percentage
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom
             ) {
-                Column {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = String.format(Locale.getDefault(), "%.1f", currentHours),
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = " / ${String.format(Locale.getDefault(), "%.1f", targetHours)} hrs",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 3.dp, start = 4.dp)
-                        )
-                    }
-                    Text(
-                        text = if (percentage >= 100) "Goal completed! 🎉" else "${AppRepository.formatDurationShort(remainingSec)} remaining",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (percentage >= 100) EmeraldAccent else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
+                Text(
+                    text = "${AppRepository.formatDurationShort(currentSeconds)} / ${if (targetHours % 1f == 0f) "${targetHours.toInt()}h" else String.format(Locale.getDefault(), "%.1fh", targetHours)}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
                 Text(
                     text = "$percentage%",
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Black,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.ExtraBold,
                     color = statusColor
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // Custom Multi-Tier Progress Bar with Milestone Markers
+            // Multi-tier Progress Bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(14.dp)
-                    .clip(RoundedCornerShape(7.dp))
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(5.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .testTag("progress_bar_${goal.goalId}")
             ) {
-                // Animated Progress Fill with Gradient
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .fillMaxWidth(animatedProgress)
-                        .clip(RoundedCornerShape(7.dp))
+                        .clip(RoundedCornerShape(5.dp))
                         .background(
                             Brush.horizontalGradient(
                                 if (percentage >= 100) {
@@ -232,116 +547,73 @@ fun WeeklyGoalTrackerCard(
                         )
                 )
 
-                // Milestone Divider Ticks (25%, 50%, 75%)
+                // Divider ticks (25%, 50%, 75%)
                 Row(
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.4f)))
-                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.4f)))
-                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.4f)))
+                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.35f)))
+                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.35f)))
+                    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.35f)))
                 }
             }
 
-            // Milestone Labels (25%, 50%, 75%, 100%)
+            // Milestone Labels
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp, start = 2.dp, end = 2.dp),
+                    .padding(top = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("0%", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                Text("25%", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                Text("50%", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                Text("75%", fontSize = 9.sp, color = MaterialTheme.colorScheme.outline)
-                Text("100%", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = if (percentage >= 100) EmeraldAccent else MaterialTheme.colorScheme.outline)
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Contextual 3-Pill Breakdown
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                GoalMetricPill(
-                    icon = Icons.Filled.Schedule,
-                    title = "Daily Needed",
-                    value = if (percentage >= 100) "Done!" else "${String.format(Locale.getDefault(), "%.1f", dailyHoursNeeded)}h/d",
-                    modifier = Modifier.weight(1f)
-                )
-                GoalMetricPill(
-                    icon = Icons.Filled.CalendarMonth,
-                    title = "Days Left",
-                    value = "$daysRemainingInWeek Days",
-                    modifier = Modifier.weight(1f)
-                )
-                GoalMetricPill(
-                    icon = Icons.Filled.CheckCircleOutline,
-                    title = "Sessions",
-                    value = "$totalSessionsCount Done",
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            // Quick Actions: Adjust Target or Start Study
-            Spacer(modifier = Modifier.height(14.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onOpenSetGoalDialog,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Filled.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Change Goal", fontSize = 12.sp)
-                }
-
-                if (onStartStudy != null) {
-                    Button(
-                        onClick = onStartStudy,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Study Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                Text("0%", fontSize = 8.sp, color = MaterialTheme.colorScheme.outline)
+                Text("25%", fontSize = 8.sp, color = MaterialTheme.colorScheme.outline)
+                Text("50%", fontSize = 8.sp, color = MaterialTheme.colorScheme.outline)
+                Text("75%", fontSize = 8.sp, color = MaterialTheme.colorScheme.outline)
+                Text("100%", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = if (percentage >= 100) EmeraldAccent else MaterialTheme.colorScheme.outline)
             }
         }
     }
 }
 
+// Backward-compatible individual cards
 @Composable
-private fun GoalMetricPill(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    value: String,
+fun DailyGoalTrackerCard(
+    goal: StudyGoalEntity?,
+    todayTimeSeconds: Long,
+    todaySessionsCount: Int = 0,
+    currentStreakDays: Int = 0,
+    onOpenSetGoalDialog: () -> Unit,
+    onStartStudy: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(12.dp),
+    StudyGoalTrackerCard(
+        dailyGoal = goal,
+        todayTimeSeconds = todayTimeSeconds,
+        todaySessionsCount = todaySessionsCount,
+        currentStreakDays = currentStreakDays,
+        initialPeriod = GoalPeriod.DAILY,
+        onOpenSetGoalDialog = { onOpenSetGoalDialog() },
+        onStartStudy = onStartStudy,
         modifier = modifier
-    ) {
-        Column(
-            modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
-                Text(title, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-        }
-    }
+    )
+}
+
+@Composable
+fun WeeklyGoalTrackerCard(
+    goal: StudyGoalEntity?,
+    weeklyTimeSeconds: Long,
+    totalSessionsCount: Int,
+    onOpenSetGoalDialog: () -> Unit,
+    onStartStudy: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    StudyGoalTrackerCard(
+        weeklyGoal = goal,
+        weeklyTimeSeconds = weeklyTimeSeconds,
+        totalSessionsCount = totalSessionsCount,
+        initialPeriod = GoalPeriod.WEEKLY,
+        onOpenSetGoalDialog = { onOpenSetGoalDialog() },
+        onStartStudy = onStartStudy,
+        modifier = modifier
+    )
 }

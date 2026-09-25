@@ -215,3 +215,48 @@ interface AppNotificationDao {
     @Query("UPDATE app_notifications SET isRead = 1 WHERE userId = :userId")
     suspend fun markAllAsRead(userId: String)
 }
+
+@Dao
+interface ChatDao {
+    @Query("SELECT * FROM chat_messages WHERE channelId = :channelId ORDER BY timestamp ASC")
+    fun getMessagesForChannelFlow(channelId: String): Flow<List<ChatMessageEntity>>
+
+    @Query("SELECT * FROM chat_messages WHERE channelId = :channelId ORDER BY timestamp ASC")
+    suspend fun getMessagesForChannel(channelId: String): List<ChatMessageEntity>
+
+    @Query("SELECT * FROM chat_messages ORDER BY timestamp DESC")
+    fun getAllMessagesFlow(): Flow<List<ChatMessageEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessage(message: ChatMessageEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessages(messages: List<ChatMessageEntity>)
+
+    @Query("DELETE FROM chat_messages WHERE channelId = :channelId")
+    suspend fun deleteMessagesForChannel(channelId: String)
+}
+
+@Dao
+interface StudyGroupDao {
+    @Query("SELECT * FROM study_groups ORDER BY lastMessageTime DESC, createdAt DESC")
+    fun getAllGroupsFlow(): Flow<List<StudyGroupEntity>>
+
+    @Query("SELECT * FROM study_groups WHERE groupId = :groupId LIMIT 1")
+    suspend fun getGroupById(groupId: String): StudyGroupEntity?
+
+    @Query("SELECT * FROM study_groups WHERE groupId = :groupId LIMIT 1")
+    fun getGroupByIdFlow(groupId: String): Flow<StudyGroupEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGroup(group: StudyGroupEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGroups(groups: List<StudyGroupEntity>)
+
+    @Update
+    suspend fun updateGroup(group: StudyGroupEntity)
+
+    @Query("DELETE FROM study_groups WHERE groupId = :groupId")
+    suspend fun deleteGroupById(groupId: String)
+}

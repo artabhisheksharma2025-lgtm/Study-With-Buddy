@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,7 +19,9 @@ import com.example.data.repository.AppRepository
 import com.example.ui.components.AddGoalDialog
 import com.example.ui.components.AppBottomNavigation
 import com.example.ui.components.AppTab
+import com.example.ui.components.GoalPeriod
 import com.example.ui.components.ManualSessionDialog
+import com.example.ui.components.SetStudyGoalDialog
 import com.example.ui.components.SetWeeklyGoalDialog
 import com.example.ui.screens.*
 import com.example.ui.screens.admin.AdminPanelScreen
@@ -110,12 +113,15 @@ fun MainAppContent(
 
     val stats by mainViewModel.userStats.collectAsState()
     val subjects by mainViewModel.subjects.collectAsState()
+    val dailyGoal by mainViewModel.dailyGoal.collectAsState()
     val weeklyGoal by mainViewModel.weeklyGoal.collectAsState()
     val uiMessage by mainViewModel.uiEventMessage.collectAsState()
 
+    var showGoalsScreen by remember { mutableStateOf(false) }
     var showManualSessionDialog by remember { mutableStateOf(false) }
     var showAddGoalDialog by remember { mutableStateOf(false) }
-    var showSetWeeklyGoalDialog by remember { mutableStateOf(false) }
+    var showSetStudyGoalDialog by remember { mutableStateOf(false) }
+    var selectedGoalPeriod by remember { mutableStateOf(GoalPeriod.DAILY) }
 
     LaunchedEffect(uiMessage) {
         uiMessage?.let { msg ->
@@ -124,96 +130,121 @@ fun MainAppContent(
         }
     }
 
-    Scaffold(
-        bottomBar = {
-            AppBottomNavigation(
-                currentTab = currentTab,
-                onTabSelected = { currentTab = it }
-            )
-        },
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("main_app_scaffold")
-    ) { innerPadding ->
-        Box(
+    if (showGoalsScreen) {
+        BackHandler {
+            showGoalsScreen = false
+        }
+        GoalsScreen(
+            mainViewModel = mainViewModel,
+            stats = stats,
+            onOpenCreateGoalDialog = { showAddGoalDialog = true }
+        )
+    } else {
+        Scaffold(
+            bottomBar = {
+                AppBottomNavigation(
+                    currentTab = currentTab,
+                    onTabSelected = { currentTab = it }
+                )
+            },
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (currentTab) {
-                AppTab.HOME -> {
-                    HomeScreen(
-                        user = user,
-                        stats = stats,
-                        mainViewModel = mainViewModel,
-                        onNavigateTab = { currentTab = it },
-                        onOpenManualSessionDialog = { showManualSessionDialog = true },
-                        onOpenAddGoalDialog = { showAddGoalDialog = true },
-                        onScanFriendQR = {
-                            currentTab = AppTab.FRIENDS
-                        }
-                    )
-                }
-                AppTab.STUDY -> {
-                    StudyScreen(mainViewModel = mainViewModel)
-                }
-                AppTab.STATS -> {
-                    StatsScreen(
-                        stats = stats,
-                        weeklyGoal = weeklyGoal,
-                        onOpenSetWeeklyGoalDialog = { showSetWeeklyGoalDialog = true },
-                        onStartStudy = { currentTab = AppTab.STUDY }
-                    )
-                }
-                AppTab.FRIENDS -> {
-                    FriendsScreen(
-                        friendsViewModel = friendsViewModel,
-                        mainViewModel = mainViewModel
-                    )
-                }
-                AppTab.PROFILE -> {
-                    ProfileScreen(
-                        user = user,
-                        stats = stats,
-                        mainViewModel = mainViewModel,
-                        authViewModel = authViewModel,
-                        adminViewModel = adminViewModel,
-                        onOpenAdminPanel = onOpenAdminPanel
-                    )
+                .testTag("main_app_scaffold")
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                when (currentTab) {
+                    AppTab.HOME -> {
+                        HomeScreen(
+                            user = user,
+                            stats = stats,
+                            mainViewModel = mainViewModel,
+                            onNavigateTab = { currentTab = it },
+                            onOpenManualSessionDialog = { showManualSessionDialog = true },
+                            onOpenAddGoalDialog = { showAddGoalDialog = true },
+                            onOpenGoalsScreen = { showGoalsScreen = true },
+                            onScanFriendQR = {
+                                currentTab = AppTab.FRIENDS
+                            }
+                        )
+                    }
+                    AppTab.STUDY -> {
+                        StudyScreen(mainViewModel = mainViewModel)
+                    }
+                    AppTab.STATS -> {
+                        StatsScreen(
+                            stats = stats,
+                            dailyGoal = dailyGoal,
+                            weeklyGoal = weeklyGoal,
+                            onOpenSetGoalDialog = { period ->
+                                selectedGoalPeriod = period
+                                showSetStudyGoalDialog = true
+                            },
+                            onStartStudy = { currentTab = AppTab.STUDY }
+                        )
+                    }
+                    AppTab.FRIENDS -> {
+                        FriendsScreen(
+                            friendsViewModel = friendsViewModel,
+                            mainViewModel = mainViewModel
+                        )
+                    }
+                    AppTab.PROFILE -> {
+                        ProfileScreen(
+                            user = user,
+                            stats = stats,
+                            mainViewModel = mainViewModel,
+                            authViewModel = authViewModel,
+                            adminViewModel = adminViewModel,
+                            onOpenAdminPanel = onOpenAdminPanel,
+                            onOpenGoalsScreen = { showGoalsScreen = true }
+                        )
+                    }
                 }
             }
-        }
 
-        if (showManualSessionDialog) {
-            ManualSessionDialog(
-                subjects = subjects,
-                onSaveSession = { subName, duration, title, notes ->
-                    mainViewModel.addManualSession(subName, duration, title, notes)
-                },
-                onDismiss = { showManualSessionDialog = false }
-            )
-        }
+            if (showManualSessionDialog) {
+                ManualSessionDialog(
+                    subjects = subjects,
+                    onSaveSession = { subName, duration, title, notes ->
+                        mainViewModel.addManualSession(subName, duration, title, notes)
+                    },
+                    onDismiss = { showManualSessionDialog = false }
+                )
+            }
 
-        if (showAddGoalDialog) {
-            AddGoalDialog(
-                subjects = subjects,
-                onCreateGoal = { title, hrs, sess, days, subName ->
-                    mainViewModel.createGoal(title, hrs, sess, days, subName)
-                },
-                onDismiss = { showAddGoalDialog = false }
-            )
-        }
+            if (showAddGoalDialog) {
+                AddGoalDialog(
+                    subjects = subjects,
+                    onCreateGoal = { title, hrs, sess, days, subName ->
+                        mainViewModel.createGoal(title, hrs, sess, days, subName)
+                    },
+                    onDismiss = { showAddGoalDialog = false }
+                )
+            }
 
-        if (showSetWeeklyGoalDialog) {
-            val targetHrs = (weeklyGoal?.targetDurationMinutes ?: (20 * 60)) / 60f
-            SetWeeklyGoalDialog(
-                initialTargetHours = targetHrs,
-                initialTitle = weeklyGoal?.title ?: "Weekly Study Target",
-                onSaveGoal = { hours, title ->
-                    mainViewModel.setWeeklyGoal(hours, title)
-                },
-                onDismiss = { showSetWeeklyGoalDialog = false }
-            )
+            if (showSetStudyGoalDialog) {
+                val dailyHrs = (dailyGoal?.targetDurationMinutes ?: (2 * 60)) / 60f
+                val weeklyHrs = (weeklyGoal?.targetDurationMinutes ?: (20 * 60)) / 60f
+
+                SetStudyGoalDialog(
+                    initialPeriod = selectedGoalPeriod,
+                    initialDailyHours = dailyHrs,
+                    initialWeeklyHours = weeklyHrs,
+                    initialTitle = if (selectedGoalPeriod == GoalPeriod.DAILY) dailyGoal?.title ?: "Daily Study Target" else weeklyGoal?.title ?: "Weekly Study Target",
+                    onSaveGoal = { period, hours, title ->
+                        if (period == GoalPeriod.DAILY) {
+                            mainViewModel.setDailyGoal(hours, title)
+                        } else {
+                            mainViewModel.setWeeklyGoal(hours, title)
+                        }
+                    },
+                    onDismiss = { showSetStudyGoalDialog = false }
+                )
+            }
         }
     }
 }

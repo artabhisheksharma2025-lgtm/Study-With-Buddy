@@ -63,12 +63,37 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Active Weekly Goal Flow
-    val weeklyGoal: StateFlow<StudyGoalEntity?> = studyGoals
+    // All Daily Goals List Flow
+    val dailyGoals: StateFlow<List<StudyGoalEntity>> = studyGoals
         .map { list ->
-            list.find { it.goalId.startsWith("weekly_goal_") || it.title.contains("weekly", ignoreCase = true) }
-                ?: list.firstOrNull()
+            list.filter {
+                it.goalId.startsWith("daily_") ||
+                it.title.contains("daily", ignoreCase = true) ||
+                (it.endDate - it.startDate) <= 129600000L
+            }
         }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // All Weekly Goals List Flow
+    val weeklyGoals: StateFlow<List<StudyGoalEntity>> = studyGoals
+        .map { list ->
+            val dailyIds = list.filter {
+                it.goalId.startsWith("daily_") ||
+                it.title.contains("daily", ignoreCase = true) ||
+                (it.endDate - it.startDate) <= 129600000L
+            }.map { it.goalId }.toSet()
+            list.filter { it.goalId !in dailyIds }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Active Primary Daily Goal Flow
+    val dailyGoal: StateFlow<StudyGoalEntity?> = dailyGoals
+        .map { it.firstOrNull() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    // Active Primary Weekly Goal Flow
+    val weeklyGoal: StateFlow<StudyGoalEntity?> = weeklyGoals
+        .map { it.firstOrNull() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     // Notifications Flow
@@ -388,16 +413,66 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
-    fun setWeeklyGoal(targetHours: Float, title: String = "Weekly Study Target") {
+    fun addOrUpdateDailyGoal(
+        title: String,
+        targetHours: Float,
+        subjectName: String = "",
+        goalId: String? = null
+    ) {
+        val uId = currentUserId ?: return
+        if (targetHours <= 0) {
+            _uiEventMessage.value = "Daily goal must be greater than 0 hours."
+            return
+        }
+        val goalTitle = title.ifBlank { if (subjectName.isNotBlank()) "Daily $subjectName Target" else "Daily Study Goal" }
+        viewModelScope.launch {
+            repository.setDailyGoal(
+                userId = uId,
+                targetHours = targetHours,
+                title = goalTitle,
+                goalId = goalId,
+                subjectName = subjectName
+            )
+            val formatted = if (targetHours >= 1.0f) {
+                if (targetHours % 1f == 0f) "${targetHours.toInt()}h" else "${String.format(java.util.Locale.getDefault(), "%.1f", targetHours)}h"
+            } else {
+                "${(targetHours * 60).toInt()}m"
+            }
+            _uiEventMessage.value = "Daily goal '$goalTitle' set to $formatted!"
+        }
+    }
+
+    fun addOrUpdateWeeklyGoal(
+        title: String,
+        targetHours: Float,
+        subjectName: String = "",
+        goalId: String? = null
+    ) {
         val uId = currentUserId ?: return
         if (targetHours <= 0) {
             _uiEventMessage.value = "Weekly goal must be greater than 0 hours."
             return
         }
+        val goalTitle = title.ifBlank { if (subjectName.isNotBlank()) "Weekly $subjectName Target" else "Weekly Study Target" }
         viewModelScope.launch {
-            repository.setWeeklyGoal(userId = uId, targetHours = targetHours, title = title)
-            _uiEventMessage.value = "Weekly study goal set to ${targetHours.toInt()}h!"
+            repository.setWeeklyGoal(
+                userId = uId,
+                targetHours = targetHours,
+                title = goalTitle,
+                goalId = goalId,
+                subjectName = subjectName
+            )
+            val formatted = if (targetHours % 1f == 0f) "${targetHours.toInt()}h" else "${String.format(java.util.Locale.getDefault(), "%.1f", targetHours)}h"
+            _uiEventMessage.value = "Weekly goal '$goalTitle' set to $formatted!"
         }
+    }
+
+    fun setDailyGoal(targetHours: Float, title: String = "Daily Study Target") {
+        addOrUpdateDailyGoal(title = title, targetHours = targetHours)
+    }
+
+    fun setWeeklyGoal(targetHours: Float, title: String = "Weekly Study Target") {
+        addOrUpdateWeeklyGoal(title = title, targetHours = targetHours)
     }
 
     // --- Profile & Privacy Settings ---

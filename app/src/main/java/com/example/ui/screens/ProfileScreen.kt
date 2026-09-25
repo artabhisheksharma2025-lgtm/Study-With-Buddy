@@ -49,6 +49,7 @@ fun ProfileScreen(
     authViewModel: AuthViewModel,
     adminViewModel: AdminViewModel? = null,
     onOpenAdminPanel: () -> Unit = {},
+    onOpenGoalsScreen: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -315,6 +316,22 @@ fun ProfileScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    if (onOpenGoalsScreen != null) {
+                        TextButton(
+                            onClick = onOpenGoalsScreen,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("profile_manage_goals_button")
+                        ) {
+                            Icon(Icons.Filled.TrackChanges, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Manage Study Goals (Daily & Weekly)", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                            Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                    }
+
                     TextButton(
                         onClick = {
                             editFullName = user.fullName

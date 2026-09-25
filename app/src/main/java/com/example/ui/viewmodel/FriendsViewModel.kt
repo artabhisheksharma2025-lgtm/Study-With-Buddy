@@ -3,14 +3,19 @@ package com.example.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.util.Log
+import com.example.data.model.ChatMessageEntity
 import com.example.data.model.FriendRequestEntity
+import com.example.data.model.StudyGroupEntity
 import com.example.data.model.StudySessionEntity
 import com.example.data.model.UserEntity
 import com.example.data.remote.OnlineUser
 import com.example.data.repository.AppRepository
 import com.example.data.util.StatsCalculator
 import com.example.data.util.UserStudyStats
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class FriendActivityItem(
@@ -81,6 +86,30 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
     private val _activityFeed = MutableStateFlow<List<FriendActivityItem>>(emptyList())
     val activityFeed: StateFlow<List<FriendActivityItem>> = _activityFeed.asStateFlow()
 
+    // Study Groups
+    val studyGroups: StateFlow<List<StudyGroupEntity>> = repository.getStudyGroupsFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Active Chat Session
+    private val _activeDirectChatFriend = MutableStateFlow<UserEntity?>(null)
+    val activeDirectChatFriend: StateFlow<UserEntity?> = _activeDirectChatFriend.asStateFlow()
+
+    private val _activeStudyGroup = MutableStateFlow<StudyGroupEntity?>(null)
+    val activeStudyGroup: StateFlow<StudyGroupEntity?> = _activeStudyGroup.asStateFlow()
+
+    private val _currentChatChannelId = MutableStateFlow<String?>(null)
+    val currentChatChannelId: StateFlow<String?> = _currentChatChannelId.asStateFlow()
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val chatMessages: StateFlow<List<ChatMessageEntity>> = _currentChatChannelId
+        .flatMapLatest { channelId ->
+            if (channelId != null) repository.getMessagesForChannelFlow(channelId)
+            else flowOf(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private var chatPollingJob: Job? = null
+
     init {
         // Observe friends list and calculate/fetch stats for friends respecting privacy
         viewModelScope.launch {
@@ -136,6 +165,10 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
             _isOnlineSyncing.value = true
             try {
                 repository.syncCurrentUserOnline()
+                val user = currentUser.value
+                if (user != null) {
+                    repository.syncUserStudyGroups(user.studyId)
+                }
                 val newReqs = repository.syncOnlineRequestsForCurrentUser()
                 if (newReqs > 0) {
                     _uiToast.value = "Received $newReqs new online friend request(s)! 👥"
@@ -245,5 +278,120 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun clearToast() {
         _uiToast.value = null
+    }
+
+    // --- Direct & Group Chat Actions ---
+
+    fun openDirectChat(friend: UserEntity) {
+        val user = currentUser.value ?: return
+        val channelId = repository.getDirectChannelId(user.studyId, friend.studyId)
+        _activeStudyGroup.value = null
+        _activeDirectChatFriend.value = friend
+        _currentChatChannelId.value = channelId
+
+        startChatPolling(channelId, isGroup = false)
+    }
+
+    fun openGroupChat(group: StudyGroupEntity) {
+        _activeDirectChatFriend.value = null
+        _activeStudyGroup.value = group
+        _currentChatChannelId.value = group.groupId
+
+        startChatPolling(group.groupId, isGroup = true)
+    }
+
+    fun closeChat() {
+        chatPollingJob?.cancel()
+        chatPollingJob = null
+        _activeDirectChatFriend.value = null
+        _activeStudyGroup.value = null
+        _currentChatChannelId.value = null
+    }
+
+    private fun startChatPolling(channelId: String, isGroup: Boolean) {
+        chatPollingJob?.cancel()
+        chatPollingJob = viewModelScope.launch {
+            // Immediate sync on entry
+            try {
+                repository.syncChannelMessages(channelId, isGroup)
+            } catch (e: Exception) {
+                Log.w("FriendsViewModel", "Initial chat sync error", e)
+            }
+
+            // Real-time polling loop every 2 seconds while user is actively in chat
+            while (isActive) {
+                delay(2000)
+                try {
+                    repository.syncChannelMessages(channelId, isGroup)
+                } catch (e: Exception) {
+                    Log.w("FriendsViewModel", "Periodic chat polling error", e)
+                }
+            }
+        }
+    }
+
+    fun sendChatMessage(text: String) {
+        val user = currentUser.value ?: return
+        val channelId = _currentChatChannelId.value ?: return
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) return
+
+        val isGroup = _activeStudyGroup.value != null
+        val groupId = _activeStudyGroup.value?.groupId
+
+        viewModelScope.launch {
+            try {
+                repository.sendChatMessage(
+                    channelId = channelId,
+                    sender = user,
+                    text = cleanText,
+                    isGroup = isGroup,
+                    groupId = groupId
+                )
+            } catch (e: Exception) {
+                Log.e("FriendsViewModel", "Failed to send chat message", e)
+                _uiToast.value = "Failed to send message: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun createStudyGroup(
+        name: String,
+        description: String,
+        selectedFriends: List<UserEntity>,
+        colorHex: String = "#3F51B5"
+    ) {
+        val user = currentUser.value ?: return
+        if (name.isBlank()) {
+            _uiToast.value = "Please enter a study group name."
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val group = repository.createStudyGroup(
+                    creator = user,
+                    name = name.trim(),
+                    description = description.trim(),
+                    selectedFriends = selectedFriends,
+                    colorHex = colorHex
+                )
+                _uiToast.value = "Study group '${group.name}' created! 🎉"
+                openGroupChat(group)
+            } catch (e: Exception) {
+                Log.e("FriendsViewModel", "Failed to create study group", e)
+                _uiToast.value = "Could not create group: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun deleteStudyGroup(groupId: String) {
+        viewModelScope.launch {
+            repository.deleteStudyGroup(groupId)
+            if (_activeStudyGroup.value?.groupId == groupId) {
+                closeChat()
+            }
+            _uiToast.value = "Study group deleted."
+        }
     }
 }

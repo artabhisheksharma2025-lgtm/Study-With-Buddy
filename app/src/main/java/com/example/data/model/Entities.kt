@@ -111,3 +111,35 @@ data class AppNotificationEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val isRead: Boolean = false
 )
+
+@Entity(tableName = "chat_messages")
+data class ChatMessageEntity(
+    @PrimaryKey val messageId: String,
+    val channelId: String, // "dm_STUDYID1_STUDYID2" or "grp_XXXX"
+    val senderUserId: String,
+    val senderName: String,
+    val senderStudyId: String,
+    val text: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isGroup: Boolean = false,
+    val groupId: String? = null,
+    val isRead: Boolean = false
+)
+
+@Entity(tableName = "study_groups")
+data class StudyGroupEntity(
+    @PrimaryKey val groupId: String,
+    val name: String,
+    val description: String = "",
+    val createdByUserId: String,
+    val createdByName: String,
+    val createdByStudyId: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val memberUserIds: String, // Comma-separated user IDs
+    val memberStudyIds: String, // Comma-separated Study IDs
+    val memberNames: String, // Comma-separated names
+    val iconName: String = "groups",
+    val colorHex: String = "#3F51B5",
+    val lastMessageText: String = "",
+    val lastMessageTime: Long = System.currentTimeMillis()
+)

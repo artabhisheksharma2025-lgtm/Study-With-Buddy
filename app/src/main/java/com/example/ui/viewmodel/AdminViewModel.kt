@@ -312,6 +312,25 @@ class AdminViewModel(private val adminRepo: AdminRepository) : ViewModel() {
         }
     }
 
+    fun resetUserPassword(userId: String, newPassword: String) {
+        val admin = getAuthenticatedAdmin() ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _loadingText.value = "Updating user password in cloud database..."
+            clearMessages()
+
+            val result = adminRepo.resetUserPassword(admin, userId, newPassword)
+            _isLoading.value = false
+
+            result.onSuccess { user ->
+                _successMessage.value = "Password for ${user.fullName} updated successfully! User can now log in with this new password from any phone."
+                refreshDashboard()
+            }.onFailure { ex ->
+                _errorMessage.value = ex.message
+            }
+        }
+    }
+
     fun editUserDetails(
         userId: String,
         fullName: String,
