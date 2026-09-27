@@ -135,15 +135,32 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
     private val _uiEventMessage = MutableStateFlow<String?>(null)
     val uiEventMessage: StateFlow<String?> = _uiEventMessage.asStateFlow()
 
+    private val _isSyncingCloudData = MutableStateFlow(false)
+    val isSyncingCloudData: StateFlow<Boolean> = _isSyncingCloudData.asStateFlow()
+
     private val _completedSessionEvent = MutableStateFlow<StudySessionEntity?>(null)
     val completedSessionEvent: StateFlow<StudySessionEntity?> = _completedSessionEvent.asStateFlow()
 
     init {
-        // Real-time automatic cloud sync: automatically pulls live announcements & admin updates
+        // Real-time automatic cloud sync: restores all study sessions, goals, subjects and keeps synced across devices
+        viewModelScope.launch {
+            currentUser.collect { user ->
+                if (user != null) {
+                    _isSyncingCloudData.value = true
+                    repository.syncAllUserDataFromCloud(user.userId)
+                    _isSyncingCloudData.value = false
+                }
+            }
+        }
+
         viewModelScope.launch {
             repository.syncFromCloud()
             while (true) {
-                kotlinx.coroutines.delay(20_000)
+                kotlinx.coroutines.delay(8_000)
+                val uId = currentUserId
+                if (uId != null) {
+                    repository.syncAllUserDataFromCloud(uId)
+                }
                 repository.syncFromCloud()
             }
         }
@@ -300,7 +317,8 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         subjectName: String,
         durationMinutes: Long,
         title: String,
-        notes: String
+        notes: String,
+        sessionDate: String? = null
     ) {
         val uId = currentUserId ?: return
         if (durationMinutes <= 0) {
@@ -309,7 +327,17 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
 
         viewModelScope.launch {
-            val endTime = System.currentTimeMillis()
+            val endTime = if (sessionDate != null) {
+                try {
+                    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault())
+                    val d = sdf.parse(sessionDate)
+                    (d?.time ?: System.currentTimeMillis()) + (12 * 3600 * 1000L)
+                } catch (e: Exception) {
+                    System.currentTimeMillis()
+                }
+            } else {
+                System.currentTimeMillis()
+            }
             val durationSec = durationMinutes * 60
             val startTime = endTime - (durationSec * 1000)
             val sub = subjects.value.find { it.name.equals(subjectName, ignoreCase = true) }
@@ -323,9 +351,10 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
                 endTime = endTime,
                 durationSeconds = durationSec,
                 title = title.ifBlank { "$subjectName Session" },
-                notes = notes
+                notes = notes,
+                customDate = sessionDate
             )
-            _uiEventMessage.value = "Study session saved!"
+            _uiEventMessage.value = if (sessionDate != null) "Session saved for $sessionDate!" else "Study session saved!"
         }
     }
 

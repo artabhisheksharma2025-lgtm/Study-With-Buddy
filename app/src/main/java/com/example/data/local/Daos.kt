@@ -105,6 +105,9 @@ interface StudySessionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: StudySessionEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSessions(sessions: List<StudySessionEntity>)
+
     @Update
     suspend fun updateSession(session: StudySessionEntity)
 
@@ -194,14 +197,23 @@ interface StudyGoalDao {
     @Query("SELECT * FROM study_goals WHERE userId = :userId ORDER BY createdAt DESC")
     fun getGoalsForUserFlow(userId: String): Flow<List<StudyGoalEntity>>
 
+    @Query("SELECT * FROM study_goals WHERE userId = :userId ORDER BY createdAt DESC")
+    suspend fun getGoalsForUser(userId: String): List<StudyGoalEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertGoal(goal: StudyGoalEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGoals(goals: List<StudyGoalEntity>)
 
     @Update
     suspend fun updateGoal(goal: StudyGoalEntity)
 
     @Delete
     suspend fun deleteGoal(goal: StudyGoalEntity)
+
+    @Query("DELETE FROM study_goals WHERE goalId = :goalId")
+    suspend fun deleteGoalById(goalId: String)
 }
 
 @Dao

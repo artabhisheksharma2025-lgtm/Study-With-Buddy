@@ -2,12 +2,17 @@ package com.example.data.repository
 
 import com.example.data.local.AppDatabase
 import com.example.data.model.*
+import com.example.data.remote.CloudDataSyncService
 import com.example.data.remote.OnlineSyncService
 import com.example.data.remote.OnlineUser
+import com.example.data.util.SecurityUtils
 import com.example.data.util.StatsCalculator
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
@@ -126,6 +131,10 @@ class AppRepository(private val db: AppDatabase) {
         }
         // Immediately sync announcements & updates from cloud
         syncFromCloud()
+        val user = userDao.getLoggedInUser()
+        if (user != null) {
+            syncAllUserDataFromCloud(user.userId)
+        }
     }
 
 
@@ -142,6 +151,102 @@ class AppRepository(private val db: AppDatabase) {
             SubjectEntity("sub_other_$userId", userId, "Other", "#607D8B")
         )
         subjectDao.insertSubjects(defaultSubjects)
+    }
+
+    // --- Cloud Synchronization & Real-time Listeners ---
+
+    suspend fun syncAllUserDataFromCloud(userId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            Log.d("AppRepository", "Starting full cloud data sync for user: $userId")
+
+            // 1. Fetch and restore Study Sessions from Cloud / Firestore
+            val cloudSessions = CloudDataSyncService.fetchStudySessionsFromCloud(userId)
+            if (cloudSessions.isNotEmpty()) {
+                studySessionDao.insertSessions(cloudSessions)
+                Log.d("AppRepository", "Restored ${cloudSessions.size} study sessions from cloud")
+            }
+
+            // 2. Fetch and restore Subjects from Cloud / Firestore
+            val cloudSubjects = CloudDataSyncService.fetchSubjectsFromCloud(userId)
+            if (cloudSubjects.isNotEmpty()) {
+                subjectDao.insertSubjects(cloudSubjects)
+                Log.d("AppRepository", "Restored ${cloudSubjects.size} subjects from cloud")
+            } else {
+                val localSubs = subjectDao.getSubjectsForUser(userId)
+                if (localSubs.isEmpty()) {
+                    seedDefaultSubjectsForUser(userId)
+                    val newSubs = subjectDao.getSubjectsForUser(userId)
+                    for (sub in newSubs) {
+                        CloudDataSyncService.syncSubjectToCloud(sub)
+                    }
+                }
+            }
+
+            // 3. Fetch and restore Goals from Cloud / Firestore
+            val cloudGoals = CloudDataSyncService.fetchGoalsFromCloud(userId)
+            if (cloudGoals.isNotEmpty()) {
+                goalDao.insertGoals(cloudGoals)
+                Log.d("AppRepository", "Restored ${cloudGoals.size} study goals from cloud")
+            }
+
+            // 4. Calculate fresh stats from restored sessions and sync summary
+            val allSessions = studySessionDao.getSessionsForUser(userId)
+            val stats = StatsCalculator.calculateStats(allSessions)
+            CloudDataSyncService.syncUserStudyStatsToCloud(userId, stats)
+
+            val user = userDao.getUserById(userId)
+            if (user != null) {
+                OnlineSyncService.syncUserOnline(user, stats)
+                CloudDataSyncService.syncUserToFirestore(user)
+            }
+
+            // 5. Attach real-time Firestore listeners for immediate cross-device updates
+            attachRealtimeCloudSync(userId)
+
+            true
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Error syncing all user data from cloud for $userId", e)
+            false
+        }
+    }
+
+    fun attachRealtimeCloudSync(userId: String) {
+        CloudDataSyncService.attachRealtimeFirestoreListeners(
+            userId = userId,
+            onSessionsChanged = { sessions ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        if (sessions.isNotEmpty()) {
+                            studySessionDao.insertSessions(sessions)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AppRepository", "Realtime sessions update failed", e)
+                    }
+                }
+            },
+            onGoalsChanged = { goals ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        if (goals.isNotEmpty()) {
+                            goalDao.insertGoals(goals)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AppRepository", "Realtime goals update failed", e)
+                    }
+                }
+            },
+            onSubjectsChanged = { subjects ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        if (subjects.isNotEmpty()) {
+                            subjectDao.insertSubjects(subjects)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AppRepository", "Realtime subjects update failed", e)
+                    }
+                }
+            }
+        )
     }
 
     // --- Authentication Operations ---
@@ -162,7 +267,8 @@ class AppRepository(private val db: AppDatabase) {
 
         // 2. Check cloud database across any device
         try {
-            val existingOnline = OnlineSyncService.findUserAuthByEmail(cleanEmail)
+            val existingOnline = CloudDataSyncService.findUserInFirestoreByEmail(cleanEmail)
+                ?: OnlineSyncService.findUserAuthByEmail(cleanEmail)
             if (existingOnline != null && !existingOnline.isDeleted) {
                 // Account exists on another phone/device -> save to local DB and guide user to log in
                 userDao.insertUser(existingOnline)
@@ -172,8 +278,16 @@ class AppRepository(private val db: AppDatabase) {
             Log.w("AppRepository", "Cloud check skipped during registration due to network", e)
         }
 
+        // Use Firebase Authentication UID as the user's unique ID
+        var firebaseUid: String? = null
+        try {
+            firebaseUid = CloudDataSyncService.getFirebaseUidIfAvailable(cleanEmail, cleanPassword)
+        } catch (e: Exception) {
+            Log.w("AppRepository", "Firebase auth check during registration", e)
+        }
+
+        val userId = firebaseUid ?: ("uid_fb_" + SecurityUtils.sha256(cleanEmail).take(20))
         val studyId = generateUniqueStudyId()
-        val userId = "user_" + UUID.randomUUID().toString().take(8)
 
         // Logout any currently logged-in user first
         userDao.logoutAllUsers()
@@ -193,13 +307,21 @@ class AppRepository(private val db: AppDatabase) {
         userDao.insertUser(newUser)
         seedDefaultSubjectsForUser(userId)
 
-        // Sync new user credentials and profile to cloud for cross-device multi-phone login & Admin management
+        // Sync new user credentials, profile and seeded subjects to Firestore & Cloud
         try {
+            CloudDataSyncService.syncUserToFirestore(newUser)
             OnlineSyncService.syncUserAuthOnline(newUser)
             OnlineSyncService.syncUserOnline(newUser, getStudyStatsForUser(userId))
+
+            val seededSubs = subjectDao.getSubjectsForUser(userId)
+            for (sub in seededSubs) {
+                CloudDataSyncService.syncSubjectToCloud(sub)
+            }
         } catch (e: Exception) {
             Log.e("AppRepository", "Failed to sync new user to cloud", e)
         }
+
+        attachRealtimeCloudSync(userId)
 
         // Create welcome notification
         notificationDao.insertNotification(
@@ -219,12 +341,23 @@ class AppRepository(private val db: AppDatabase) {
             val cleanEmail = email.trim()
             val cleanPassword = passwordHash.trim()
 
-            // 1. Check cloud FIRST for the most up-to-date credentials (including Admin changed password)
+            // 1. Check cloud FIRST for the most up-to-date credentials (Firestore first, then REST)
             var cloudUser: UserEntity? = null
             try {
-                cloudUser = OnlineSyncService.findUserAuthByEmail(cleanEmail)
+                cloudUser = CloudDataSyncService.findUserInFirestoreByEmail(cleanEmail)
+                    ?: OnlineSyncService.findUserAuthByEmail(cleanEmail)
             } catch (e: Exception) {
                 Log.w("AppRepository", "Cloud lookup failed during login", e)
+            }
+
+            // Also check if FirebaseAuth has user credentials
+            try {
+                val fbUid = CloudDataSyncService.getFirebaseUidIfAvailable(cleanEmail, cleanPassword)
+                if (fbUid != null && cloudUser == null) {
+                    cloudUser = OnlineSyncService.fetchUserAuthById(fbUid)
+                }
+            } catch (e: Exception) {
+                Log.w("AppRepository", "Firebase auth check during login", e)
             }
 
             if (cloudUser != null) {
@@ -259,11 +392,14 @@ class AppRepository(private val db: AppDatabase) {
                     userDao.updateUser(userToSave)
                 } else {
                     userDao.insertUser(userToSave)
-                    seedDefaultSubjectsForUser(userToSave.userId)
                 }
+
+                // Restore all cloud study sessions, subjects, goals, streak, and stats!
+                syncAllUserDataFromCloud(userToSave.userId)
 
                 // Keep cloud presence and online active
                 OnlineSyncService.syncUserOnline(userToSave, getStudyStatsForUser(userToSave.userId))
+                CloudDataSyncService.syncUserToFirestore(userToSave)
 
                 return@withContext Result.success(userToSave)
             }
@@ -301,13 +437,94 @@ class AppRepository(private val db: AppDatabase) {
             // Try to sync credentials and presence to cloud if internet becomes available
             try {
                 OnlineSyncService.syncUserAuthOnline(updatedUser)
-                OnlineSyncService.syncUserOnline(updatedUser, getStudyStatsForUser(updatedUser.userId))
+                CloudDataSyncService.syncUserToFirestore(updatedUser)
+                syncAllUserDataFromCloud(updatedUser.userId)
             } catch (e: Exception) {
                 Log.w("AppRepository", "Failed to sync to cloud during offline login fallback", e)
             }
 
             Result.success(updatedUser)
         }
+
+    suspend fun signInWithGoogleAccount(
+        email: String,
+        displayName: String,
+        googleId: String? = null,
+        idToken: String? = null
+    ): Result<UserEntity> = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim().lowercase()
+        val cleanName = displayName.trim().ifBlank { cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() } }
+
+        // 1. Try Firebase Auth with Google Credential if ID token is available
+        var fbUid: String? = null
+        if (!idToken.isNullOrBlank() && CloudDataSyncService.isFirebaseAvailable()) {
+            try {
+                val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                val authResult = com.google.firebase.auth.FirebaseAuth.getInstance().signInWithCredential(credential).await()
+                fbUid = authResult.user?.uid
+            } catch (e: Throwable) {
+                Log.w("AppRepository", "Firebase Google credential sign in fallback: ${e.message}")
+            }
+        }
+
+        // 2. Check if user already exists in cloud (Firestore or Cloud REST) or locally
+        var cloudUser = CloudDataSyncService.findUserInFirestoreByEmail(cleanEmail)
+            ?: OnlineSyncService.findUserAuthByEmail(cleanEmail)
+            ?: userDao.getUserByEmail(cleanEmail)
+
+        if (cloudUser != null) {
+            if (cloudUser.isDeleted) {
+                return@withContext Result.failure(Exception("This Google account has been deleted by an administrator."))
+            }
+            if (cloudUser.accountStatus == "SUSPENDED") {
+                val reason = if (cloudUser.suspensionReason.isNotBlank()) " Reason: ${cloudUser.suspensionReason}" else ""
+                return@withContext Result.failure(Exception("This account has been suspended by an administrator.$reason"))
+            }
+            if (cloudUser.accountStatus == "DISABLED") {
+                return@withContext Result.failure(Exception("This account has been disabled by an administrator."))
+            }
+        }
+
+        val targetUserId = fbUid ?: cloudUser?.userId ?: ("uid_google_" + SecurityUtils.sha256(cleanEmail).take(20))
+        val targetStudyId = cloudUser?.studyId ?: generateUniqueStudyId()
+
+        val userToSave = UserEntity(
+            userId = targetUserId,
+            fullName = if (cloudUser != null && cloudUser.fullName.isNotBlank()) cloudUser.fullName else cleanName,
+            username = if (cloudUser != null && cloudUser.username.isNotBlank()) cloudUser.username else cleanEmail.substringBefore("@").lowercase().replace(".", "_"),
+            email = cleanEmail,
+            passwordHash = "google_oauth_verified",
+            studyId = targetStudyId,
+            isLoggedIn = true,
+            accountStatus = cloudUser?.accountStatus ?: "ACTIVE",
+            joinedDate = cloudUser?.joinedDate ?: System.currentTimeMillis(),
+            lastActiveTime = System.currentTimeMillis()
+        )
+
+        userDao.logoutAllUsers()
+        val localExisting = userDao.getUserById(userToSave.userId) ?: userDao.getUserByEmail(cleanEmail)
+        if (localExisting != null) {
+            userDao.updateUser(userToSave)
+        } else {
+            userDao.insertUser(userToSave)
+        }
+
+        // Sync auth & profile to Cloud REST and Firestore
+        try {
+            CloudDataSyncService.syncUserToFirestore(userToSave)
+            OnlineSyncService.syncUserAuthOnline(userToSave)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync Google user to cloud", e)
+        }
+
+        // Restore all cloud study sessions, subjects, goals, streak, and stats
+        syncAllUserDataFromCloud(userToSave.userId)
+
+        // Keep cloud presence and online active
+        OnlineSyncService.syncUserOnline(userToSave, getStudyStatsForUser(userToSave.userId))
+
+        Result.success(userToSave)
+    }
 
     suspend fun logoutUser() = withContext(Dispatchers.IO) {
         userDao.logoutAllUsers()
@@ -331,15 +548,30 @@ class AppRepository(private val db: AppDatabase) {
                 colorHex = colorHex
             )
             subjectDao.insertSubject(subject)
+            try {
+                CloudDataSyncService.syncSubjectToCloud(subject)
+            } catch (e: Exception) {
+                Log.e("AppRepository", "Failed to sync subject to cloud", e)
+            }
             subject
         }
 
     suspend fun updateSubject(subject: SubjectEntity) = withContext(Dispatchers.IO) {
         subjectDao.insertSubject(subject)
+        try {
+            CloudDataSyncService.syncSubjectToCloud(subject)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync updated subject to cloud", e)
+        }
     }
 
     suspend fun deleteSubject(subject: SubjectEntity) = withContext(Dispatchers.IO) {
         subjectDao.deleteSubject(subject)
+        try {
+            CloudDataSyncService.deleteSubjectFromCloud(subject.userId, subject.subjectId)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to delete subject from cloud", e)
+        }
     }
 
     // --- Study Sessions ---
@@ -354,10 +586,11 @@ class AppRepository(private val db: AppDatabase) {
         endTime: Long,
         durationSeconds: Long,
         title: String,
-        notes: String
+        notes: String,
+        customDate: String? = null
     ): StudySessionEntity = withContext(Dispatchers.IO) {
         val sessionId = "sess_" + UUID.randomUUID().toString().take(8)
-        val sessionDate = getFormattedDateString(endTime)
+        val sessionDate = customDate ?: getFormattedDateString(endTime)
 
         val session = StudySessionEntity(
             sessionId = sessionId,
@@ -377,6 +610,13 @@ class AppRepository(private val db: AppDatabase) {
         // Clear active timer for user
         activeTimerDao.clearActiveTimer(userId)
 
+        // Sync session to Firestore & Cloud immediately
+        try {
+            CloudDataSyncService.syncStudySessionToCloud(session)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync study session to cloud", e)
+        }
+
         // Check if session triggered goal/streak notification
         notificationDao.insertNotification(
             AppNotificationEntity(
@@ -387,12 +627,13 @@ class AppRepository(private val db: AppDatabase) {
             )
         )
 
-        // Sync updated hours and streak to online community in background
+        // Sync updated hours, streak & stats summary to cloud and online community
         try {
             val user = userDao.getUserById(userId)
+            val allSessions = studySessionDao.getSessionsForUser(userId)
+            val stats = StatsCalculator.calculateStats(allSessions)
+            CloudDataSyncService.syncUserStudyStatsToCloud(userId, stats)
             if (user != null) {
-                val allSessions = studySessionDao.getSessionsForUser(userId)
-                val stats = StatsCalculator.calculateStats(allSessions)
                 OnlineSyncService.syncUserOnline(user, stats)
             }
         } catch (e: Exception) {
@@ -404,10 +645,34 @@ class AppRepository(private val db: AppDatabase) {
 
     suspend fun updateStudySession(session: StudySessionEntity) = withContext(Dispatchers.IO) {
         studySessionDao.updateSession(session)
+        try {
+            CloudDataSyncService.syncStudySessionToCloud(session)
+            val allSessions = studySessionDao.getSessionsForUser(session.userId)
+            val stats = StatsCalculator.calculateStats(allSessions)
+            CloudDataSyncService.syncUserStudyStatsToCloud(session.userId, stats)
+            val user = userDao.getUserById(session.userId)
+            if (user != null) {
+                OnlineSyncService.syncUserOnline(user, stats)
+            }
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync updated session to cloud", e)
+        }
     }
 
     suspend fun deleteStudySession(sessionId: String, userId: String) = withContext(Dispatchers.IO) {
         studySessionDao.deleteSessionById(sessionId, userId)
+        try {
+            CloudDataSyncService.deleteStudySessionFromCloud(userId, sessionId)
+            val allSessions = studySessionDao.getSessionsForUser(userId)
+            val stats = StatsCalculator.calculateStats(allSessions)
+            CloudDataSyncService.syncUserStudyStatsToCloud(userId, stats)
+            val user = userDao.getUserById(userId)
+            if (user != null) {
+                OnlineSyncService.syncUserOnline(user, stats)
+            }
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync deleted session from cloud", e)
+        }
     }
 
     // --- Active Timer ---
@@ -481,6 +746,22 @@ class AppRepository(private val db: AppDatabase) {
 
     fun getPendingReceivedRequests(userId: String): Flow<List<FriendRequestEntity>> =
         friendDao.getPendingReceivedRequestsFlow(userId)
+
+    fun getPendingSentRequests(userId: String): Flow<List<FriendRequestEntity>> =
+        friendDao.getPendingSentRequestsFlow(userId)
+
+    suspend fun cancelFriendRequest(request: FriendRequestEntity) = withContext(Dispatchers.IO) {
+        friendDao.deleteFriendRequestById(request.requestId)
+        val sender = userDao.getUserById(request.senderId)
+        val receiver = userDao.getUserById(request.receiverId)
+        if (sender != null && receiver != null) {
+            try {
+                OnlineSyncService.updateOnlineRequestStatus(receiver.studyId, sender.studyId, "CANCELLED")
+            } catch (e: Exception) {
+                Log.e("AppRepository", "Error cancelling online request", e)
+            }
+        }
+    }
 
     suspend fun sendFriendRequest(senderId: String, targetStudyId: String): Result<String> =
         withContext(Dispatchers.IO) {
@@ -574,6 +855,8 @@ class AppRepository(private val db: AppDatabase) {
         if (receiver != null && sender != null) {
             try {
                 OnlineSyncService.updateOnlineRequestStatus(receiver.studyId, sender.studyId, "ACCEPTED")
+                // Record mutual friendship online so BOTH users see each other in My Friends
+                OnlineSyncService.recordOnlineFriendship(sender, receiver)
             } catch (e: Exception) {
                 Log.e("AppRepository", "Error updating online request status", e)
             }
@@ -601,8 +884,10 @@ class AppRepository(private val db: AppDatabase) {
             // First sync current user online so others can find this user
             syncCurrentUserOnline()
 
-            val onlineRequests = OnlineSyncService.fetchIncomingOnlineRequests(user.studyId)
             var newCount = 0
+
+            // 1. Fetch pending incoming requests sent to me from other users
+            val onlineRequests = OnlineSyncService.fetchIncomingOnlineRequests(user.studyId)
             for (req in onlineRequests) {
                 var sender = userDao.getUserByStudyId(req.senderStudyId)
                 if (sender == null) {
@@ -625,17 +910,72 @@ class AppRepository(private val db: AppDatabase) {
                             AppNotificationEntity(
                                 notificationId = "notif_online_" + req.requestId,
                                 userId = user.userId,
-                                title = "New Online Friend Request 🌐",
-                                message = "${sender.fullName} (@${sender.username}) sent you a study friend request!"
+                                title = "New Online Friend Request 👥",
+                                message = "${sender.fullName} sent you a study friend request!"
                             )
                         )
                         newCount++
                     }
                 }
             }
+
+            // 2. Fetch all online mutual friendships for current user!
+            // When user B accepts user A's request, user A syncs and sees user B in My Friends immediately!
+            val onlineFriendships = OnlineSyncService.fetchOnlineFriendships(user.studyId)
+            for (of in onlineFriendships) {
+                var friendUser = userDao.getUserByStudyId(of.friendStudyId)
+                if (friendUser == null) {
+                    friendUser = searchUserByStudyId(of.friendStudyId)
+                }
+                if (friendUser == null && of.friendStudyId.isNotBlank()) {
+                    val fallback = UserEntity(
+                        userId = of.friendUserId.ifBlank { "user_" + of.friendStudyId.lowercase().replace("-", "") },
+                        fullName = of.friendName.ifBlank { "Study Buddy" },
+                        username = of.friendUsername.ifBlank { of.friendStudyId.lowercase().replace("-", "") },
+                        email = "${of.friendStudyId.lowercase().replace("-", "")}@student.community",
+                        passwordHash = "cloud_user",
+                        studyId = of.friendStudyId,
+                        privacyVisibility = "PUBLIC",
+                        isLoggedIn = false
+                    )
+                    userDao.insertUser(fallback)
+                    friendUser = fallback
+                }
+                if (friendUser != null && friendUser.userId != user.userId) {
+                    val existingFriendship = friendDao.getFriendshipBetween(user.userId, friendUser.userId)
+                    if (existingFriendship == null) {
+                        val fId = "f_sync_" + UUID.randomUUID().toString().take(8)
+                        friendDao.insertFriendship(
+                            FriendshipEntity(
+                                friendshipId = fId,
+                                userId1 = user.userId,
+                                userId2 = friendUser.userId,
+                                createdAt = of.timestamp
+                            )
+                        )
+
+                        // Mark any pending request between them as ACCEPTED
+                        val pendingReq = friendDao.getFriendRequestBetween(user.userId, friendUser.userId)
+                        if (pendingReq != null && pendingReq.status != "ACCEPTED") {
+                            friendDao.updateFriendRequest(pendingReq.copy(status = "ACCEPTED", updatedAt = System.currentTimeMillis()))
+                        }
+
+                        notificationDao.insertNotification(
+                            AppNotificationEntity(
+                                notificationId = "notif_friend_" + UUID.randomUUID().toString().take(8),
+                                userId = user.userId,
+                                title = "Friend Request Accepted 🎉",
+                                message = "${friendUser.fullName} is now your study friend! Start chatting & sharing goals."
+                            )
+                        )
+                        newCount++
+                    }
+                }
+            }
+
             newCount
         } catch (e: Exception) {
-            Log.e("AppRepository", "Error syncing online requests", e)
+            Log.e("AppRepository", "Error syncing online requests and friendships", e)
             0
         }
     }
@@ -661,18 +1001,28 @@ class AppRepository(private val db: AppDatabase) {
         }
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun getAcceptedFriendsFlow(userId: String): Flow<List<UserEntity>> {
-        return friendDao.getFriendshipsFlow(userId).map { friendships ->
+        return friendDao.getFriendshipsFlow(userId).flatMapLatest { friendships ->
             val friendIds = friendships.map {
                 if (it.userId1 == userId) it.userId2 else it.userId1
             }
-            if (friendIds.isEmpty()) emptyList()
-            else userDao.getUsersByIds(friendIds)
+            if (friendIds.isEmpty()) flowOf(emptyList())
+            else userDao.getUsersByIdsFlow(friendIds)
         }
     }
 
     suspend fun removeFriend(userId: String, friendId: String) = withContext(Dispatchers.IO) {
+        val user1 = userDao.getUserById(userId)
+        val user2 = userDao.getUserById(friendId)
         friendDao.removeFriendship(userId, friendId)
+        if (user1 != null && user2 != null) {
+            try {
+                OnlineSyncService.removeOnlineFriendship(user1.studyId, user2.studyId)
+            } catch (e: Exception) {
+                Log.e("AppRepository", "Failed to remove online friendship", e)
+            }
+        }
     }
 
     suspend fun getUserById(userId: String): UserEntity? = withContext(Dispatchers.IO) {
@@ -704,10 +1054,20 @@ class AppRepository(private val db: AppDatabase) {
             subjectName = subjectName.trim()
         )
         goalDao.insertGoal(goal)
+        try {
+            CloudDataSyncService.syncGoalToCloud(goal)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync goal to cloud", e)
+        }
     }
 
     suspend fun deleteGoal(goal: StudyGoalEntity) = withContext(Dispatchers.IO) {
         goalDao.deleteGoal(goal)
+        try {
+            CloudDataSyncService.deleteGoalFromCloud(goal.userId, goal.goalId)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to delete goal from cloud", e)
+        }
     }
 
     suspend fun setDailyGoal(
@@ -744,6 +1104,11 @@ class AppRepository(private val db: AppDatabase) {
             createdAt = now
         )
         goalDao.insertGoal(goal)
+        try {
+            CloudDataSyncService.syncGoalToCloud(goal)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync daily goal to cloud", e)
+        }
         goal
     }
 
@@ -784,6 +1149,11 @@ class AppRepository(private val db: AppDatabase) {
             createdAt = now
         )
         goalDao.insertGoal(goal)
+        try {
+            CloudDataSyncService.syncGoalToCloud(goal)
+        } catch (e: Exception) {
+            Log.e("AppRepository", "Failed to sync weekly goal to cloud", e)
+        }
         goal
     }
 
@@ -861,8 +1231,8 @@ class AppRepository(private val db: AppDatabase) {
     // --- Chat & Study Group Messaging ---
 
     fun getDirectChannelId(studyId1: String, studyId2: String): String {
-        val s1 = studyId1.trim().uppercase()
-        val s2 = studyId2.trim().uppercase()
+        val s1 = studyId1.trim().uppercase().replace(" ", "")
+        val s2 = studyId2.trim().uppercase().replace(" ", "")
         return if (s1 <= s2) "dm_${s1}_${s2}" else "dm_${s2}_${s1}"
     }
 
@@ -986,6 +1356,61 @@ class AppRepository(private val db: AppDatabase) {
             groupDao.insertGroups(onlineGroups)
         }
         onlineGroups
+    }
+
+    suspend fun addFriendsToStudyGroup(
+        groupId: String,
+        addedBy: UserEntity,
+        newFriends: List<UserEntity>
+    ): StudyGroupEntity? = withContext(Dispatchers.IO) {
+        val group = groupDao.getGroupById(groupId) ?: return@withContext null
+        if (newFriends.isEmpty()) return@withContext group
+
+        val existingUserIds = group.memberUserIds.split(",").map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
+        val existingStudyIds = group.memberStudyIds.split(",").map { it.trim().uppercase() }.filter { it.isNotBlank() }.toMutableList()
+        val existingNames = group.memberNames.split(",").map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
+
+        val newlyAddedNames = mutableListOf<String>()
+        for (friend in newFriends) {
+            val fStudyId = friend.studyId.trim().uppercase()
+            if (!existingStudyIds.contains(fStudyId)) {
+                existingUserIds.add(friend.userId)
+                existingStudyIds.add(fStudyId)
+                existingNames.add(friend.fullName)
+                newlyAddedNames.add(friend.fullName)
+            }
+        }
+
+        if (newlyAddedNames.isEmpty()) return@withContext group
+
+        val updatedGroup = group.copy(
+            memberUserIds = existingUserIds.joinToString(","),
+            memberStudyIds = existingStudyIds.joinToString(","),
+            memberNames = existingNames.joinToString(","),
+            lastMessageText = "${addedBy.fullName} added ${newlyAddedNames.joinToString(", ")}",
+            lastMessageTime = System.currentTimeMillis()
+        )
+
+        groupDao.updateGroup(updatedGroup)
+        OnlineSyncService.syncStudyGroupOnline(updatedGroup)
+
+        // Post system announcement message in group chat
+        val sysMsg = ChatMessageEntity(
+            messageId = "msg_added_" + UUID.randomUUID().toString().take(10),
+            channelId = groupId,
+            senderUserId = addedBy.userId,
+            senderName = "System",
+            senderStudyId = addedBy.studyId,
+            text = "${addedBy.fullName} added ${newlyAddedNames.joinToString(", ")} to the study group 👥✨",
+            timestamp = System.currentTimeMillis(),
+            isGroup = true,
+            groupId = groupId,
+            isRead = true
+        )
+        chatDao.insertMessage(sysMsg)
+        OnlineSyncService.sendChatMessageOnline(sysMsg)
+
+        updatedGroup
     }
 
     suspend fun deleteStudyGroup(groupId: String) = withContext(Dispatchers.IO) {

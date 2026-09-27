@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material3.*
@@ -28,10 +29,26 @@ fun ManualSessionDialog(
     onSaveSession: (subjectName: String, durationMinutes: Long, title: String, notes: String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    ManualSessionDialog(
+        subjects = subjects,
+        initialDate = null,
+        onSaveSession = { sub, dur, title, notes, _ -> onSaveSession(sub, dur, title, notes) },
+        onDismiss = onDismiss
+    )
+}
+
+@Composable
+fun ManualSessionDialog(
+    subjects: List<SubjectEntity>,
+    initialDate: String? = null,
+    onSaveSession: (subjectName: String, durationMinutes: Long, title: String, notes: String, sessionDate: String?) -> Unit,
+    onDismiss: () -> Unit
+) {
     var selectedSubjectName by remember { mutableStateOf(subjects.firstOrNull()?.name ?: "Mathematics") }
     var durationMinutesInput by remember { mutableStateOf("45") }
     var titleInput by remember { mutableStateOf("") }
     var notesInput by remember { mutableStateOf("") }
+    var sessionDateInput by remember { mutableStateOf(initialDate) }
 
     var showSubjectMenu by remember { mutableStateOf(false) }
 
@@ -44,6 +61,29 @@ fun ManualSessionDialog(
                     .fillMaxWidth()
                     .padding(vertical = 8.dp)
             ) {
+                if (sessionDateInput != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Filled.DateRange, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Logging for date: $sessionDateInput",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
                 // Select Subject Dropdown
                 Text("Select Subject:", style = MaterialTheme.typography.labelMedium)
                 Spacer(modifier = Modifier.height(4.dp))
@@ -121,7 +161,7 @@ fun ManualSessionDialog(
                 onClick = {
                     val duration = durationMinutesInput.toLongOrNull() ?: 0L
                     if (duration > 0) {
-                        onSaveSession(selectedSubjectName, duration, titleInput, notesInput)
+                        onSaveSession(selectedSubjectName, duration, titleInput, notesInput, sessionDateInput)
                         onDismiss()
                     }
                 },

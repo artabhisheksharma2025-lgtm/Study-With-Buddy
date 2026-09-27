@@ -281,7 +281,8 @@ fun StreakCalendarCard(
     currentStreak: Int,
     longestStreak: Int,
     activeDates: Set<String>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenFullCalendar: (() -> Unit)? = null
 ) {
     Card(
         modifier = modifier,
@@ -365,7 +366,7 @@ fun StreakCalendarCard(
                                         .clip(CircleShape)
                                         .background(
                                             if (isToday) MaterialTheme.colorScheme.primary
-                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
                                         )
                                 )
                             }
@@ -378,6 +379,21 @@ fun StreakCalendarCard(
                             fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
                         )
                     }
+                }
+            }
+
+            if (onOpenFullCalendar != null) {
+                Spacer(modifier = Modifier.height(14.dp))
+                FilledTonalButton(
+                    onClick = onOpenFullCalendar,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("button_open_calendar_from_streak")
+                ) {
+                    Icon(Icons.Filled.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("View Full Study Calendar 📅", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }

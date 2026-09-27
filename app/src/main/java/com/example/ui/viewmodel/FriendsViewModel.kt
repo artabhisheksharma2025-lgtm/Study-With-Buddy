@@ -41,13 +41,44 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Pending Requests
+    // Pending Received Requests
     val pendingReceivedRequests: StateFlow<List<FriendRequestEntity>> = currentUser
         .flatMapLatest { user ->
             if (user != null) repository.getPendingReceivedRequests(user.userId)
             else flowOf(emptyList())
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Pending Sent Requests (so user sees their sent friend requests before acceptance)
+    val pendingSentRequests: StateFlow<List<FriendRequestEntity>> = currentUser
+        .flatMapLatest { user ->
+            if (user != null) repository.getPendingSentRequests(user.userId)
+            else flowOf(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _onlineCommunityUsers = MutableStateFlow<List<OnlineUser>>(emptyList())
+    val onlineCommunityUsers: StateFlow<List<OnlineUser>> = _onlineCommunityUsers.asStateFlow()
+
+    // Online Status for Friends: Set of Study IDs that are active within last 10 minutes
+    val onlineFriendsStudyIds: StateFlow<Set<String>> = combine(
+        friendsList,
+        _onlineCommunityUsers
+    ) { friends, onlineUsers ->
+        val now = System.currentTimeMillis()
+        val onlineSet = mutableSetOf<String>()
+        val onlineMap = onlineUsers.associateBy { it.studyId.uppercase() }
+
+        for (f in friends) {
+            val sId = f.studyId.uppercase()
+            val onlineUser = onlineMap[sId]
+            val lastActive = onlineUser?.lastActiveTime ?: f.lastActiveTime
+            if (now - lastActive <= 10 * 60 * 1000L) {
+                onlineSet.add(sId)
+            }
+        }
+        onlineSet.toSet()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     // Search by Study ID
     private val _searchQuery = MutableStateFlow("")
@@ -64,9 +95,6 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
 
     private val _isOnlineSyncing = MutableStateFlow(false)
     val isOnlineSyncing: StateFlow<Boolean> = _isOnlineSyncing.asStateFlow()
-
-    private val _onlineCommunityUsers = MutableStateFlow<List<OnlineUser>>(emptyList())
-    val onlineCommunityUsers: StateFlow<List<OnlineUser>> = _onlineCommunityUsers.asStateFlow()
 
     private val _uiToast = MutableStateFlow<String?>(null)
     val uiToast: StateFlow<String?> = _uiToast.asStateFlow()
@@ -158,6 +186,26 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
                 syncOnline()
             }
         }
+
+        // Real-time periodic polling loop for incoming requests, accepted friendships & online status
+        viewModelScope.launch {
+            while (isActive) {
+                delay(2500)
+                try {
+                    val user = currentUser.value
+                    if (user != null) {
+                        val count = repository.syncOnlineRequestsForCurrentUser()
+                        if (count > 0) {
+                            _uiToast.value = "Updated friends & study requests! 👥"
+                        }
+                        val onlineUsers = repository.fetchOnlineCommunityUsers()
+                        _onlineCommunityUsers.value = onlineUsers
+                    }
+                } catch (e: Exception) {
+                    Log.w("FriendsViewModel", "Background sync loop error", e)
+                }
+            }
+        }
     }
 
     fun syncOnline() {
@@ -230,6 +278,7 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
                 _uiToast.value = msg
                 _searchResultUser.value = null
                 _searchQuery.value = ""
+                syncOnline()
             }.onFailure { ex ->
                 _uiToast.value = ex.message ?: "Could not send friend request."
             }
@@ -239,7 +288,8 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
     fun acceptRequest(request: FriendRequestEntity) {
         viewModelScope.launch {
             repository.acceptFriendRequest(request)
-            _uiToast.value = "Friend request accepted!"
+            _uiToast.value = "Friend request accepted! 🎉"
+            syncOnline()
         }
     }
 
@@ -247,6 +297,7 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
         viewModelScope.launch {
             repository.rejectFriendRequest(request)
             _uiToast.value = "Friend request declined."
+            syncOnline()
         }
     }
 
@@ -272,8 +323,20 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
         _compareFriend.value = friend
     }
 
+    fun cancelSentRequest(request: FriendRequestEntity) {
+        viewModelScope.launch {
+            repository.cancelFriendRequest(request)
+            _uiToast.value = "Sent friend request cancelled."
+            syncOnline()
+        }
+    }
+
     suspend fun getSenderUserForRequest(senderId: String): UserEntity? {
         return repository.getUserById(senderId)
+    }
+
+    suspend fun getReceiverUserForRequest(receiverId: String): UserEntity? {
+        return repository.getUserById(receiverId)
     }
 
     fun clearToast() {
@@ -318,9 +381,9 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
                 Log.w("FriendsViewModel", "Initial chat sync error", e)
             }
 
-            // Real-time polling loop every 2 seconds while user is actively in chat
+            // Real-time polling loop every 1.0 second while user is actively in chat
             while (isActive) {
-                delay(2000)
+                delay(1000)
                 try {
                     repository.syncChannelMessages(channelId, isGroup)
                 } catch (e: Exception) {
@@ -348,9 +411,32 @@ class FriendsViewModel(private val repository: AppRepository) : ViewModel() {
                     isGroup = isGroup,
                     groupId = groupId
                 )
+                // Immediate refresh after sending so both local and remote reflect instantly
+                repository.syncChannelMessages(channelId, isGroup)
             } catch (e: Exception) {
                 Log.e("FriendsViewModel", "Failed to send chat message", e)
                 _uiToast.value = "Failed to send message: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    fun addFriendsToGroup(groupId: String, newFriends: List<UserEntity>) {
+        val user = currentUser.value ?: return
+        if (newFriends.isEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val updated = repository.addFriendsToStudyGroup(groupId, user, newFriends)
+                if (updated != null) {
+                    if (_activeStudyGroup.value?.groupId == groupId) {
+                        _activeStudyGroup.value = updated
+                    }
+                    _uiToast.value = "Added ${newFriends.size} friend(s) to ${updated.name}! 👥"
+                    repository.syncChannelMessages(groupId, isGroup = true)
+                }
+            } catch (e: Exception) {
+                Log.e("FriendsViewModel", "Failed to add friends to study group", e)
+                _uiToast.value = "Could not add friends: ${e.localizedMessage}"
             }
         }
     }

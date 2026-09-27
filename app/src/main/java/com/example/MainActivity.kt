@@ -13,6 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import com.example.data.local.AppDatabase
 import com.example.data.repository.AdminRepository
 import com.example.data.repository.AppRepository
@@ -70,7 +72,18 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center
                             ) {
-                                CircularProgressIndicator()
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    CircularProgressIndicator()
+                                    Text(
+                                        text = "Syncing your study data from cloud...",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
                             }
                         }
                         is AuthUiState.SignedOut -> {
@@ -123,6 +136,10 @@ fun MainAppContent(
     var showSetStudyGoalDialog by remember { mutableStateOf(false) }
     var selectedGoalPeriod by remember { mutableStateOf(GoalPeriod.DAILY) }
 
+    val studySessions by mainViewModel.studySessions.collectAsState()
+    val isSyncingCloudData by mainViewModel.isSyncingCloudData.collectAsState()
+    var statsInitialMode by remember { mutableStateOf(com.example.ui.screens.StatsViewMode.OVERVIEW) }
+
     LaunchedEffect(uiMessage) {
         uiMessage?.let { msg ->
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -144,7 +161,12 @@ fun MainAppContent(
             bottomBar = {
                 AppBottomNavigation(
                     currentTab = currentTab,
-                    onTabSelected = { currentTab = it }
+                    onTabSelected = {
+                        if (it == AppTab.STATS) {
+                            statsInitialMode = com.example.ui.screens.StatsViewMode.OVERVIEW
+                        }
+                        currentTab = it
+                    }
                 )
             },
             modifier = Modifier
@@ -156,8 +178,34 @@ fun MainAppContent(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                when (currentTab) {
-                    AppTab.HOME -> {
+                if (isSyncingCloudData && studySessions.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.padding(24.dp)
+                        ) {
+                            CircularProgressIndicator()
+                            Text(
+                                text = "Restoring your study sessions, streak & goals from cloud...",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Text(
+                                text = "Please wait, keeping your data synced across devices",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else {
+                    when (currentTab) {
+                        AppTab.HOME -> {
                         HomeScreen(
                             user = user,
                             stats = stats,
@@ -166,6 +214,10 @@ fun MainAppContent(
                             onOpenManualSessionDialog = { showManualSessionDialog = true },
                             onOpenAddGoalDialog = { showAddGoalDialog = true },
                             onOpenGoalsScreen = { showGoalsScreen = true },
+                            onOpenCalendar = {
+                                statsInitialMode = com.example.ui.screens.StatsViewMode.CALENDAR
+                                currentTab = AppTab.STATS
+                            },
                             onScanFriendQR = {
                                 currentTab = AppTab.FRIENDS
                             }
@@ -179,6 +231,13 @@ fun MainAppContent(
                             stats = stats,
                             dailyGoal = dailyGoal,
                             weeklyGoal = weeklyGoal,
+                            studySessions = studySessions,
+                            subjects = subjects,
+                            initialViewMode = statsInitialMode,
+                            onDeleteSession = { sessionId -> mainViewModel.deleteSession(sessionId) },
+                            onAddManualSession = { sub, dur, title, notes, dt ->
+                                mainViewModel.addManualSession(sub, dur, title, notes, dt)
+                            },
                             onOpenSetGoalDialog = { period ->
                                 selectedGoalPeriod = period
                                 showSetStudyGoalDialog = true
@@ -203,6 +262,7 @@ fun MainAppContent(
                             onOpenGoalsScreen = { showGoalsScreen = true }
                         )
                     }
+                }
                 }
             }
 

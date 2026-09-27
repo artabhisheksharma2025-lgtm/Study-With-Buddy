@@ -17,6 +17,15 @@ object SecurityUtils {
     }
 
     /**
+     * Computes hex SHA-256 string for consistent IDs.
+     */
+    fun sha256(text: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hash = digest.digest(text.toByteArray(Charsets.UTF_8))
+        return hash.joinToString("") { "%02x".format(it) }
+    }
+
+    /**
      * Hashes password using SHA-256 with unique per-user salt and multiple iterations.
      * Never stores plaintext passwords anywhere.
      */

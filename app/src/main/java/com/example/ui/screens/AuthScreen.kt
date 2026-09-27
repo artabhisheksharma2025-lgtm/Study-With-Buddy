@@ -42,6 +42,8 @@ fun AuthScreen(
 ) {
     val errorMessage by authViewModel.errorMessage.collectAsState()
     val successMessage by authViewModel.successMessage.collectAsState()
+    val isAuthenticating by authViewModel.isAuthenticating.collectAsState()
+    val syncStatusMessage by authViewModel.syncStatusMessage.collectAsState()
 
     var isSignUpTab by remember { mutableStateOf(false) }
 
@@ -180,6 +182,41 @@ fun AuthScreen(
                 }
             }
 
+            if (isAuthenticating) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.5.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Column {
+                            Text(
+                                text = syncStatusMessage ?: "Restoring your study sessions & goals from cloud...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "Cross-device cloud sync • Zero data lost",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+            }
+
             Card(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -309,17 +346,36 @@ fun AuthScreen(
                                 authViewModel.login(email, password, onAdminVerified)
                             }
                         },
+                        enabled = !isAuthenticating,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
                             .testTag(if (isSignUpTab) "signup_submit_button" else "login_submit_button"),
                         shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text(
-                            text = if (isSignUpTab) "Create Account" else "Log In",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                        if (isAuthenticating) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Text(
+                                    text = if (isSignUpTab) "Creating Account..." else "Logging In & Syncing...",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = if (isSignUpTab) "Create Account" else "Log In",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

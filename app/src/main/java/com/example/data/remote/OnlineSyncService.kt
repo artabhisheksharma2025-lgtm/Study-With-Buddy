@@ -35,6 +35,14 @@ data class OnlineFriendRequest(
     val timestamp: Long
 )
 
+data class OnlineFriendship(
+    val friendStudyId: String,
+    val friendName: String,
+    val friendUserId: String,
+    val friendUsername: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 object OnlineSyncService {
     private const val TAG = "OnlineSyncService"
     private const val BASE_URL = "https://sanchardb.pages.dev"
@@ -297,6 +305,116 @@ object OnlineSyncService {
             false
         }
     }
+
+    /**
+     * Records mutual friendship online so BOTH users (sender and receiver) see each other
+     * in their "My Friends" list across different devices.
+     */
+    suspend fun recordOnlineFriendship(user1: UserEntity, user2: UserEntity): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val s1 = user1.studyId.trim().uppercase()
+                val s2 = user2.studyId.trim().uppercase()
+                val now = System.currentTimeMillis()
+
+                val json1For2 = JSONObject().apply {
+                    put("friendStudyId", s1)
+                    put("friendName", user1.fullName)
+                    put("friendUserId", user1.userId)
+                    put("friendUsername", user1.username)
+                    put("timestamp", now)
+                }.toString()
+
+                val json2For1 = JSONObject().apply {
+                    put("friendStudyId", s2)
+                    put("friendName", user2.fullName)
+                    put("friendUserId", user2.userId)
+                    put("friendUsername", user2.username)
+                    put("timestamp", now)
+                }.toString()
+
+                // Save s2 into s1's friends list
+                val url1 = "$BASE_URL/set/studytracker/friendships/$s1/$s2?value=${encode(json2For1)}"
+                client.newCall(Request.Builder().url(url1).build()).execute().close()
+
+                // Save s1 into s2's friends list
+                val url2 = "$BASE_URL/set/studytracker/friendships/$s2/$s1?value=${encode(json1For2)}"
+                client.newCall(Request.Builder().url(url2).build()).execute().close()
+
+                Log.d(TAG, "Successfully recorded mutual friendship online between $s1 and $s2")
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to record mutual friendship online", e)
+                false
+            }
+        }
+
+    /**
+     * Fetches all accepted online friends for a study ID from the cloud database.
+     */
+    suspend fun fetchOnlineFriendships(myStudyId: String): List<OnlineFriendship> =
+        withContext(Dispatchers.IO) {
+            try {
+                val cleanId = myStudyId.trim().uppercase()
+                val url = "$BASE_URL/get/studytracker/friendships/$cleanId"
+                val request = Request.Builder().url(url).build()
+                val response = client.newCall(request).execute()
+
+                if (!response.isSuccessful) {
+                    response.close()
+                    return@withContext emptyList()
+                }
+
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val root = JSONObject(body)
+                if (root.optString("status") != "success") return@withContext emptyList()
+                val data = root.optJSONObject("data") ?: return@withContext emptyList()
+
+                val list = mutableListOf<OnlineFriendship>()
+                val keys = data.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    val raw = data.optString(key)
+                    val obj = try {
+                        JSONObject(raw)
+                    } catch (e: Exception) {
+                        data.optJSONObject(key) ?: continue
+                    }
+                    list.add(
+                        OnlineFriendship(
+                            friendStudyId = obj.optString("friendStudyId", key),
+                            friendName = obj.optString("friendName", "Study Friend"),
+                            friendUserId = obj.optString("friendUserId", "user_$key"),
+                            friendUsername = obj.optString("friendUsername", ""),
+                            timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                        )
+                    )
+                }
+                list
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching online friendships for $myStudyId", e)
+                emptyList()
+            }
+        }
+
+    /**
+     * Removes mutual friendship online when a user removes a friend.
+     */
+    suspend fun removeOnlineFriendship(studyId1: String, studyId2: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val s1 = studyId1.trim().uppercase()
+                val s2 = studyId2.trim().uppercase()
+                val url1 = "$BASE_URL/delete/studytracker/friendships/$s1/$s2"
+                val url2 = "$BASE_URL/delete/studytracker/friendships/$s2/$s1"
+                client.newCall(Request.Builder().url(url1).build()).execute().close()
+                client.newCall(Request.Builder().url(url2).build()).execute().close()
+                true
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing online friendship", e)
+                false
+            }
+        }
 
     /**
      * Publishes or updates an announcement on the global cloud database so that

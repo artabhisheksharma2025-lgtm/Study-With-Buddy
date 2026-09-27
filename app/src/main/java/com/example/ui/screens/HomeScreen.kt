@@ -65,6 +65,7 @@ fun HomeScreen(
     onOpenAddGoalDialog: () -> Unit,
     onScanFriendQR: () -> Unit = {},
     onOpenGoalsScreen: (() -> Unit)? = null,
+    onOpenCalendar: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -377,12 +378,13 @@ fun HomeScreen(
                 }
             }
 
-            // Streak Calendar Card
+            // Streak Calendar Card with direct access to full calendar
             item {
                 StreakCalendarCard(
                     currentStreak = stats.currentStreakDays,
                     longestStreak = stats.longestStreakDays,
                     activeDates = stats.activeDates,
+                    onOpenFullCalendar = onOpenCalendar,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

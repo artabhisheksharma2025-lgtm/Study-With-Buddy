@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +51,8 @@ fun ChatConversationScreen(
 
     var inputText by remember { mutableStateOf("") }
     var showGroupInfoDialog by remember { mutableStateOf(false) }
+    var showAddFriendsDialog by remember { mutableStateOf(false) }
+    val allFriends by friendsViewModel.friendsList.collectAsState()
 
     val listState = rememberLazyListState()
 
@@ -144,6 +147,16 @@ fun ChatConversationScreen(
                 actions = {
                     if (isGroup) {
                         IconButton(
+                            onClick = { showAddFriendsDialog = true },
+                            modifier = Modifier.testTag("group_add_friends_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.PersonAdd,
+                                contentDescription = "Add Friends to Group",
+                                tint = EmeraldAccent
+                            )
+                        }
+                        IconButton(
                             onClick = { showGroupInfoDialog = true },
                             modifier = Modifier.testTag("group_info_button")
                         ) {
@@ -151,6 +164,17 @@ fun ChatConversationScreen(
                                 imageVector = Icons.Filled.Info,
                                 contentDescription = "Group Info",
                                 tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { friendsViewModel.syncOnline() },
+                            modifier = Modifier.testTag("direct_chat_refresh_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Refresh,
+                                contentDescription = "Refresh Real-Time Chat",
+                                tint = EmeraldAccent
                             )
                         }
                     }
@@ -313,9 +337,23 @@ fun ChatConversationScreen(
             group = activeGroup!!,
             currentUser = currentUser,
             onDismiss = { showGroupInfoDialog = false },
+            onOpenAddFriends = { showAddFriendsDialog = true },
             onDeleteGroup = {
                 friendsViewModel.deleteStudyGroup(activeGroup!!.groupId)
                 showGroupInfoDialog = false
+            }
+        )
+    }
+
+    // WhatsApp-Style Add Friends to Group Dialog
+    if (showAddFriendsDialog && activeGroup != null) {
+        AddFriendsToGroupDialog(
+            group = activeGroup!!,
+            friends = allFriends,
+            onDismiss = { showAddFriendsDialog = false },
+            onAddFriends = { selectedFriends ->
+                friendsViewModel.addFriendsToGroup(activeGroup!!.groupId, selectedFriends)
+                showAddFriendsDialog = false
             }
         )
     }
@@ -396,6 +434,7 @@ fun StudyGroupInfoDialog(
     group: StudyGroupEntity,
     currentUser: UserEntity?,
     onDismiss: () -> Unit,
+    onOpenAddFriends: () -> Unit = {},
     onDeleteGroup: () -> Unit
 ) {
     val isCreator = currentUser?.userId == group.createdByUserId ||
@@ -433,6 +472,23 @@ fun StudyGroupInfoDialog(
                     )
                 }
 
+                // WhatsApp-Style Add Friends Action Button
+                Button(
+                    onClick = {
+                        onDismiss()
+                        onOpenAddFriends()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("group_info_add_friends_btn"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldAccent)
+                ) {
+                    Icon(Icons.Filled.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Add Friends to Group", fontWeight = FontWeight.Bold, color = Color.White)
+                }
+
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -452,7 +508,10 @@ fun StudyGroupInfoDialog(
                     modifier = Modifier.padding(top = 4.dp)
                 )
 
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.heightIn(max = 160.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     memberNames.forEachIndexed { idx, name ->
                         val sId = memberStudyIds.getOrNull(idx) ?: ""
                         Row(
@@ -473,6 +532,15 @@ fun StudyGroupInfoDialog(
                             if (sId.isNotBlank()) {
                                 Text("($sId)", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                             }
+                            if (idx == 0) {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text("Admin", fontSize = 10.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }
@@ -491,6 +559,218 @@ fun StudyGroupInfoDialog(
                 ) {
                     Text("Delete Group")
                 }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddFriendsToGroupDialog(
+    group: StudyGroupEntity,
+    friends: List<UserEntity>,
+    onDismiss: () -> Unit,
+    onAddFriends: (List<UserEntity>) -> Unit
+) {
+    val existingStudyIds = remember(group.memberStudyIds) {
+        group.memberStudyIds.split(",").map { it.trim().uppercase() }.filter { it.isNotBlank() }.toSet()
+    }
+
+    val availableFriends = remember(friends, existingStudyIds) {
+        friends.filter { friend -> !existingStudyIds.contains(friend.studyId.trim().uppercase()) }
+    }
+
+    var selectedFriends by remember { mutableStateOf<Set<UserEntity>>(emptySet()) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filteredAvailableFriends = remember(availableFriends, searchQuery) {
+        if (searchQuery.isBlank()) availableFriends
+        else {
+            val q = searchQuery.trim().lowercase()
+            availableFriends.filter {
+                it.fullName.lowercase().contains(q) ||
+                it.username.lowercase().contains(q) ||
+                it.studyId.lowercase().contains(q)
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PersonAdd,
+                        contentDescription = null,
+                        tint = EmeraldAccent,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Text("Add Participants", fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${group.name} • ${selectedFriends.size} selected",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Search field (WhatsApp style)
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search friends by name or Study ID...", fontSize = 13.sp) },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = {
+                        if (searchQuery.isNotBlank()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("add_friends_group_search")
+                )
+
+                // WhatsApp-style Selected Avatars Tray
+                if (selectedFriends.isNotEmpty()) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        items(selectedFriends.toList()) { friend ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
+                                    .clickable { selectedFriends = selectedFriends - friend }
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.size(22.dp).clip(CircleShape).background(IndigoPrimary),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(friend.fullName.take(1).uppercase(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Text(friend.fullName.split(" ").firstOrNull() ?: friend.fullName, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                    Icon(Icons.Filled.Close, contentDescription = "Remove", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                if (availableFriends.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (friends.isEmpty()) "No study friends added yet. Add friends using their Study ID first!"
+                            else "All of your study friends are already in this group! 🎉",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else if (filteredAvailableFriends.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No matching friends found for '$searchQuery'",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 200.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(filteredAvailableFriends) { friend ->
+                            val isSelected = friend in selectedFriends
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f) else Color.Transparent)
+                                    .clickable {
+                                        selectedFriends = if (isSelected) selectedFriends - friend else selectedFriends + friend
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier.size(38.dp).clip(CircleShape).background(if (isSelected) EmeraldAccent else IndigoPrimary),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(friend.fullName.take(1).uppercase(), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(friend.fullName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                                        Text("@${friend.username} • ID: ${friend.studyId}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+
+                                Checkbox(
+                                    checked = isSelected,
+                                    onCheckedChange = { checked ->
+                                        selectedFriends = if (checked) selectedFriends + friend else selectedFriends - friend
+                                    },
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = EmeraldAccent
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onAddFriends(selectedFriends.toList())
+                },
+                enabled = selectedFriends.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = EmeraldAccent),
+                modifier = Modifier.testTag("confirm_add_friends_to_group_btn")
+            ) {
+                Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Add ${selectedFriends.size} Friend(s)", fontWeight = FontWeight.Bold, color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
             }
         }
     )
