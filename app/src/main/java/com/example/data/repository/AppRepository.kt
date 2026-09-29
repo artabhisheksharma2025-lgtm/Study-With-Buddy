@@ -1165,6 +1165,18 @@ class AppRepository(private val db: AppDatabase) {
         notificationDao.markAllAsRead(userId)
     }
 
+    suspend fun deleteNotification(notificationId: String) = withContext(Dispatchers.IO) {
+        notificationDao.deleteNotification(notificationId)
+    }
+
+    suspend fun clearAllNotifications(userId: String) = withContext(Dispatchers.IO) {
+        notificationDao.clearAllNotifications(userId)
+    }
+
+    suspend fun markNotificationAsRead(notificationId: String) = withContext(Dispatchers.IO) {
+        notificationDao.markNotificationAsRead(notificationId)
+    }
+
     // --- Helpers & Utilities ---
     private fun generateUniqueStudyId(): String {
         val chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"

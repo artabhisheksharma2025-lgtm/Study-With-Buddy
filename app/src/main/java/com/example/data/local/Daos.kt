@@ -226,6 +226,15 @@ interface AppNotificationDao {
 
     @Query("UPDATE app_notifications SET isRead = 1 WHERE userId = :userId")
     suspend fun markAllAsRead(userId: String)
+
+    @Query("DELETE FROM app_notifications WHERE notificationId = :notificationId")
+    suspend fun deleteNotification(notificationId: String)
+
+    @Query("DELETE FROM app_notifications WHERE userId = :userId")
+    suspend fun clearAllNotifications(userId: String)
+
+    @Query("UPDATE app_notifications SET isRead = 1 WHERE notificationId = :notificationId")
+    suspend fun markNotificationAsRead(notificationId: String)
 }
 
 @Dao

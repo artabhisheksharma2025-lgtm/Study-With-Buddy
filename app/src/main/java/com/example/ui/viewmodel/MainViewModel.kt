@@ -539,6 +539,32 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         }
     }
 
+    fun markAllNotificationsRead() {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.markAllNotificationsRead(user.userId)
+        }
+    }
+
+    fun markNotificationAsRead(notificationId: String) {
+        viewModelScope.launch {
+            repository.markNotificationAsRead(notificationId)
+        }
+    }
+
+    fun dismissNotification(notificationId: String) {
+        viewModelScope.launch {
+            repository.deleteNotification(notificationId)
+        }
+    }
+
+    fun clearAllNotifications() {
+        val user = currentUser.value ?: return
+        viewModelScope.launch {
+            repository.clearAllNotifications(user.userId)
+        }
+    }
+
     fun clearUiMessage() {
         _uiEventMessage.value = null
     }

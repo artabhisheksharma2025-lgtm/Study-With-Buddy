@@ -96,6 +96,28 @@ fun ResponsiveAnnouncementBanner(
 
     val hasPhoto = !banner.imageUrl.isNullOrBlank()
 
+    val bannerTimeText = remember(banner.createdDate) {
+        try {
+            val now = System.currentTimeMillis()
+            val diff = (now - banner.createdDate).coerceAtLeast(0)
+            val minutes = diff / (1000 * 60)
+            val hours = diff / (1000 * 60 * 60)
+            val days = diff / (1000 * 60 * 60 * 24)
+            val timeStr = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date(banner.createdDate))
+            val dateStr = java.text.SimpleDateFormat("dd MMM", java.util.Locale.getDefault()).format(java.util.Date(banner.createdDate))
+
+            when {
+                minutes < 1 -> "Just now • $timeStr"
+                minutes < 60 -> "$minutes m ago • $timeStr"
+                hours < 24 -> "$hours h ago • $timeStr"
+                days < 2 -> "Yesterday • $timeStr"
+                else -> "$dateStr • $timeStr"
+            }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     AnimatedVisibility(
         visible = !isDismissed,
         enter = fadeIn() + expandVertically(),
@@ -140,7 +162,7 @@ fun ResponsiveAnnouncementBanner(
                             )
                     )
 
-                    // Top row: Priority Badge + Optional Dismiss Button
+                    // Top row: Priority Badge + Real Time + Optional Dismiss Button
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -148,17 +170,45 @@ fun ResponsiveAnnouncementBanner(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            color = accentColor.copy(alpha = 0.9f),
-                            shape = RoundedCornerShape(6.dp)
-                        ) {
-                            Text(
-                                text = banner.priority,
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                color = accentColor.copy(alpha = 0.9f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = banner.priority,
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            if (bannerTimeText.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Schedule,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(
+                                            text = bannerTimeText,
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         if (banner.isDismissible) {
@@ -295,6 +345,14 @@ fun ResponsiveAnnouncementBanner(
                                         color = Color(0xFF0F172A)
                                     )
                                     PriorityBadge(priority = banner.priority, color = accentColor)
+                                    if (bannerTimeText.isNotEmpty()) {
+                                        Text(
+                                            text = "• $bannerTimeText",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFF64748B),
+                                            fontSize = 11.sp
+                                        )
+                                    }
                                 }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
@@ -383,13 +441,38 @@ fun ResponsiveAnnouncementBanner(
                                         )
                                     }
                                     Column {
-                                        Text(
-                                            text = banner.title,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF0F172A)
-                                        )
-                                        PriorityBadge(priority = banner.priority, color = accentColor)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = banner.title,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF0F172A)
+                                            )
+                                            PriorityBadge(priority = banner.priority, color = accentColor)
+                                        }
+                                        if (bannerTimeText.isNotEmpty()) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Schedule,
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF64748B),
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text(
+                                                    text = bannerTimeText,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color(0xFF64748B),
+                                                    fontSize = 10.5.sp
+                                                )
+                                            }
+                                        }
                                     }
                                 }
 

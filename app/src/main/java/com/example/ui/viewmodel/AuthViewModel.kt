@@ -196,7 +196,7 @@ class AuthViewModel(
             }
 
             // If Credential Manager didn't return an email (common on emulators/devices without Play Services logged in),
-            // show the one-tap Google Account selector dialog
+            // show the Google Account selector dialog
             if (finalEmail.isNullOrBlank()) {
                 _isAuthenticating.value = false
                 _showGoogleAccountPicker.value = true
@@ -206,18 +206,23 @@ class AuthViewModel(
             _showGoogleAccountPicker.value = false
             _syncStatusMessage.value = "Restoring your study sessions, streak & goals for $finalEmail..."
 
-            val result = repository.signInWithGoogleAccount(
-                email = finalEmail,
-                displayName = finalName ?: finalEmail.substringBefore("@"),
-                idToken = idToken
-            )
+            try {
+                val result = repository.signInWithGoogleAccount(
+                    email = finalEmail,
+                    displayName = finalName ?: finalEmail.substringBefore("@"),
+                    idToken = idToken
+                )
 
-            _isAuthenticating.value = false
-            result.onSuccess {
-                _errorMessage.value = null
-                _successMessage.value = "Welcome! Signed in with Google as $finalEmail"
-            }.onFailure { ex ->
-                _errorMessage.value = ex.message ?: "Google Sign-In failed."
+                _isAuthenticating.value = false
+                result.onSuccess {
+                    _errorMessage.value = null
+                    _successMessage.value = "Welcome! Signed in with Google as $finalEmail"
+                }.onFailure { ex ->
+                    _errorMessage.value = ex.message ?: "Google Sign-In failed."
+                }
+            } catch (e: Exception) {
+                _isAuthenticating.value = false
+                _errorMessage.value = e.message ?: "Google Sign-In failed."
             }
         }
     }

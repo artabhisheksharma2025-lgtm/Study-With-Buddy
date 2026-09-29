@@ -23,13 +23,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.model.UserEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
+import com.example.ui.components.GoogleAccountPickerDialog
 import com.example.ui.components.QRCodeDialog
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
@@ -66,6 +69,7 @@ fun ProfileScreen(
 
     var editFullName by remember { mutableStateOf(user.fullName) }
     var editUsername by remember { mutableStateOf(user.username) }
+    val showGoogleAccountPicker by authViewModel.showGoogleAccountPicker.collectAsState()
 
     Scaffold(
         topBar = {
@@ -343,6 +347,64 @@ fun ProfileScreen(
                         Icon(Icons.Outlined.Edit, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Edit Profile Details", modifier = Modifier.weight(1f))
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                    // Google Account Status / Switch Button
+                    val isGoogleUser = user.passwordHash == "google_oauth_verified" || user.email.endsWith("@gmail.com")
+                    if (isGoogleUser) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_google_logo),
+                                    contentDescription = null,
+                                    tint = Color.Unspecified,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Google Account Active",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = user.email,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Filled.Check,
+                                    contentDescription = "Verified",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        TextButton(
+                            onClick = { authViewModel.loginWithGoogle(context) },
+                            modifier = Modifier.fillMaxWidth().testTag("profile_connect_google_button")
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_google_logo),
+                                contentDescription = null,
+                                tint = Color.Unspecified,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Switch to / Connect Google Account", modifier = Modifier.weight(1f))
+                            Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                        }
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -682,6 +744,15 @@ fun ProfileScreen(
                     ) {
                         Text("Cancel")
                     }
+                }
+            )
+        }
+
+        if (showGoogleAccountPicker) {
+            GoogleAccountPickerDialog(
+                onDismissRequest = { authViewModel.dismissGoogleAccountPicker() },
+                onSelectAccount = { email, name ->
+                    authViewModel.loginWithGoogle(context, selectedEmail = email, selectedName = name)
                 }
             )
         }
