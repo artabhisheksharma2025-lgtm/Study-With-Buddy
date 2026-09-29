@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -29,6 +30,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.StudySessionEntity
 import com.example.data.model.SubjectEntity
 import com.example.data.repository.AppRepository
+import com.example.data.util.FocusModeHelper
+import com.example.data.util.InstalledAppItem
 import com.example.ui.theme.EmeraldAccent
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
@@ -47,7 +50,11 @@ fun StudyScreen(
     val sessions by mainViewModel.studySessions.collectAsState()
     val stats by mainViewModel.userStats.collectAsState()
     val completedEvent by mainViewModel.completedSessionEvent.collectAsState()
+    val allowedApps by mainViewModel.allowedApps.collectAsState()
+    val isFocusModeActive by mainViewModel.isFocusModeActive.collectAsState()
+    val isFocusModePaused by mainViewModel.isFocusModePaused.collectAsState()
 
+    var showAppAccessSheet by remember { mutableStateOf(false) }
     var showSubjectDropdown by remember { mutableStateOf(false) }
     var showCreateSubjectDialog by remember { mutableStateOf(false) }
     var newSubjectName by remember { mutableStateOf("") }
@@ -286,6 +293,124 @@ fun StudyScreen(
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text("Finish")
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Focus Mode Live Status Card
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isFocusModeActive) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        } else if (isFocusModePaused) {
+                            FlameOrange.copy(alpha = 0.12f)
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        }
+                    ),
+                    border = if (isFocusModeActive) {
+                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                    } else null,
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("study_focus_mode_card")
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isFocusModeActive) MaterialTheme.colorScheme.primary
+                                        else if (isFocusModePaused) FlameOrange
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isFocusModeActive) Icons.Filled.Lock else if (isFocusModePaused) Icons.Filled.Pause else Icons.Filled.LockOpen,
+                                    contentDescription = "Focus Mode",
+                                    tint = if (isFocusModeActive || isFocusModePaused) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "🎯 Focus Mode",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (isFocusModeActive) EmeraldAccent.copy(alpha = 0.2f)
+                                        else if (isFocusModePaused) FlameOrange.copy(alpha = 0.2f)
+                                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    ) {
+                                        Text(
+                                            text = if (isFocusModeActive) "ACTIVE" else if (isFocusModePaused) "PAUSED" else "READY",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isFocusModeActive) EmeraldAccent else if (isFocusModePaused) FlameOrange else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = if (isFocusModeActive) {
+                                        "Only allowed apps can be opened. Other apps are restricted."
+                                    } else if (isFocusModePaused) {
+                                        "Timer paused. Restrictions temporarily lifted."
+                                    } else {
+                                        "Activates automatically when Start Studying is pressed."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${allowedApps.size} apps allowed in Focus",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            FilledTonalButton(
+                                onClick = { showAppAccessSheet = true },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("study_access_allowed_apps_button")
+                            ) {
+                                Icon(Icons.Filled.Apps, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isFocusModeActive) "Open Allowed App" else "View App Access",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
@@ -789,6 +914,137 @@ fun StudyScreen(
                 dismissButton = {
                     TextButton(onClick = { subjectToDelete = null }) {
                         Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // Focus Mode App Access Dialog
+        if (showAppAccessSheet) {
+            val allApps = remember(allowedApps) {
+                FocusModeHelper.loadInstalledApps(context, allowedApps)
+            }
+            AlertDialog(
+                onDismissRequest = { showAppAccessSheet = false },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Filled.Apps,
+                        contentDescription = null,
+                        tint = IndigoPrimary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = if (isFocusModeActive) "Focus Mode App Launcher" else "App Access in Focus Mode",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isFocusModeActive) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                        ) {
+                            Text(
+                                text = if (isFocusModeActive) {
+                                    "🎯 Focus Mode is ACTIVE. Only allowed apps can be opened. Tap a restricted app to test Focus Mode Active screen."
+                                } else {
+                                    "When timer is running, only Allowed apps can be used. Configure allowed apps in Profile → Settings → Allow Apps."
+                                },
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f, fill = false)
+                        ) {
+                            items(allApps, key = { it.packageName }) { app ->
+                                val isAllowed = allowedApps.contains(app.packageName)
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isAllowed) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isAllowed) Icons.Filled.CheckCircle else Icons.Filled.Lock,
+                                            contentDescription = null,
+                                            tint = if (isAllowed) EmeraldAccent else FlameOrange,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = app.appName,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = if (isAllowed) "Allowed in Focus" else "Restricted",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                color = if (isAllowed) EmeraldAccent else FlameOrange
+                                            )
+                                        }
+
+                                        if (isAllowed) {
+                                            Button(
+                                                onClick = {
+                                                    showAppAccessSheet = false
+                                                    FocusModeHelper.launchAppOrCheckRestriction(
+                                                        context = context,
+                                                        app = app,
+                                                        isFocusModeActive = isFocusModeActive,
+                                                        onRestricted = { mainViewModel.triggerRestrictedAppScreen(it) }
+                                                    )
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Text("Open", fontSize = 12.sp)
+                                            }
+                                        } else {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    showAppAccessSheet = false
+                                                    if (isFocusModeActive) {
+                                                        // Show Focus Mode Active screen!
+                                                        mainViewModel.triggerRestrictedAppScreen(app)
+                                                    } else {
+                                                        Toast.makeText(context, "${app.appName} will be restricted when timer starts", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                },
+                                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(12.dp), tint = FlameOrange)
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text("Restricted", fontSize = 11.sp, color = FlameOrange)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showAppAccessSheet = false }) {
+                        Text("Close")
                     }
                 }
             )

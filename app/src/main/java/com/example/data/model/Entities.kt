@@ -22,7 +22,8 @@ data class UserEntity(
     val accountStatus: String = "ACTIVE", // ACTIVE, SUSPENDED, DISABLED
     val lastActiveTime: Long = System.currentTimeMillis(),
     val isDeleted: Boolean = false,
-    val suspensionReason: String = ""
+    val suspensionReason: String = "",
+    val allowedApps: String = "" // Comma-separated list of allowed package names during Focus Mode
 )
 
 @Entity(tableName = "subjects")

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
 import com.example.data.repository.AppRepository
+import com.example.data.util.FocusModeHelper
+import com.example.data.util.InstalledAppItem
 import com.example.data.util.StatsCalculator
 import com.example.data.util.UserStudyStats
 import kotlinx.coroutines.Job
@@ -220,6 +222,7 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         val uId = currentUserId ?: return
         val current = _timerState.value
         val startTime = if (current.startTimeMillis == 0L) System.currentTimeMillis() else current.startTimeMillis
+        val isFirstStart = current.elapsedSeconds == 0L
 
         _timerState.value = current.copy(
             userId = uId,
@@ -229,6 +232,12 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
         )
         startTimerCoroutines()
         saveCurrentTimerState()
+
+        if (isFirstStart) {
+            _uiEventMessage.value = "🎯 Focus Mode Activated! Unallowed apps are restricted."
+        } else {
+            _uiEventMessage.value = "🎯 Focus Mode Resumed! App restrictions re-enabled."
+        }
     }
 
     fun pauseTimer() {
@@ -238,6 +247,7 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
             lastUpdatedMillis = System.currentTimeMillis()
         )
         saveCurrentTimerState()
+        _uiEventMessage.value = "⏸️ Timer Paused: App restrictions temporarily lifted."
     }
 
     fun resetTimer() {
@@ -567,5 +577,40 @@ class MainViewModel(private val repository: AppRepository) : ViewModel() {
 
     fun clearUiMessage() {
         _uiEventMessage.value = null
+    }
+
+    // --- Focus Mode & Allowed Apps ---
+    val allowedApps: StateFlow<Set<String>> = currentUser
+        .map { user -> FocusModeHelper.parseAllowedApps(user?.allowedApps) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, FocusModeHelper.DEFAULT_ALLOWED_PACKAGES)
+
+    // Focus mode is active whenever study timer is running
+    val isFocusModeActive: StateFlow<Boolean> = _timerState
+        .map { it.isRunning }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // Focus mode restrictions are temporarily paused when timer is paused
+    val isFocusModePaused: StateFlow<Boolean> = _timerState
+        .map { !it.isRunning && it.elapsedSeconds > 0 }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _restrictedAppAttempt = MutableStateFlow<InstalledAppItem?>(null)
+    val restrictedAppAttempt: StateFlow<InstalledAppItem?> = _restrictedAppAttempt.asStateFlow()
+
+    fun triggerRestrictedAppScreen(app: InstalledAppItem) {
+        _restrictedAppAttempt.value = app
+    }
+
+    fun dismissRestrictedAppScreen() {
+        _restrictedAppAttempt.value = null
+    }
+
+    fun updateAllowedApps(packageNames: Set<String>) {
+        val user = currentUser.value ?: return
+        val serialized = FocusModeHelper.serializeAllowedApps(packageNames)
+        viewModelScope.launch {
+            repository.updateUserProfile(user.copy(allowedApps = serialized))
+            _uiEventMessage.value = "Allowed apps saved to profile (${packageNames.size} allowed)."
+        }
     }
 }

@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -30,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.model.AdminEntity
-import com.example.ui.components.GoogleAccountPickerDialog
 import com.example.ui.theme.IndigoPrimary
 import com.example.ui.theme.VioletTertiary
 import com.example.ui.util.CustomerSupportHelper
@@ -46,7 +44,6 @@ fun AuthScreen(
     val successMessage by authViewModel.successMessage.collectAsState()
     val isAuthenticating by authViewModel.isAuthenticating.collectAsState()
     val syncStatusMessage by authViewModel.syncStatusMessage.collectAsState()
-    val showGoogleAccountPicker by authViewModel.showGoogleAccountPicker.collectAsState()
 
     var isSignUpTab by remember { mutableStateOf(false) }
 
@@ -231,67 +228,6 @@ fun AuthScreen(
                         .padding(20.dp)
                         .fillMaxWidth()
                 ) {
-                    // Google Account Sign-In Button
-                    OutlinedButton(
-                        onClick = {
-                            authViewModel.loginWithGoogle(context)
-                        },
-                        enabled = !isAuthenticating,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("google_login_button")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_google_logo),
-                                contentDescription = "Google Logo",
-                                modifier = Modifier.size(22.dp),
-                                tint = Color.Unspecified
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                text = if (isSignUpTab) "Sign up with Google" else "Continue with Google",
-                                style = MaterialTheme.typography.titleMedium.copy(fontSize = 15.sp),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Or Divider
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        HorizontalDivider(
-                            modifier = Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        )
-                        Text(
-                            text = "  OR CONTINUE WITH EMAIL  ",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Medium
-                        )
-                        HorizontalDivider(
-                            modifier = Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
                     if (isSignUpTab) {
                         OutlinedTextField(
                             value = fullName,
@@ -564,16 +500,6 @@ fun AuthScreen(
                     TextButton(onClick = { showForgotPasswordDialog = false }) {
                         Text("Cancel")
                     }
-                }
-            )
-        }
-
-        // Google Account Picker Dialog
-        if (showGoogleAccountPicker) {
-            GoogleAccountPickerDialog(
-                onDismissRequest = { authViewModel.dismissGoogleAccountPicker() },
-                onSelectAccount = { email, name ->
-                    authViewModel.loginWithGoogle(context, selectedEmail = email, selectedName = name)
                 }
             )
         }

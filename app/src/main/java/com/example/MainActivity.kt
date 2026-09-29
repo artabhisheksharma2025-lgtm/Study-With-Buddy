@@ -139,6 +139,7 @@ fun MainAppContent(
     val studySessions by mainViewModel.studySessions.collectAsState()
     val isSyncingCloudData by mainViewModel.isSyncingCloudData.collectAsState()
     var statsInitialMode by remember { mutableStateOf(com.example.ui.screens.StatsViewMode.OVERVIEW) }
+    val restrictedAppAttempt by mainViewModel.restrictedAppAttempt.collectAsState()
 
     LaunchedEffect(uiMessage) {
         uiMessage?.let { msg ->
@@ -147,7 +148,24 @@ fun MainAppContent(
         }
     }
 
-    if (showGoalsScreen) {
+    if (restrictedAppAttempt != null) {
+        BackHandler {
+            mainViewModel.dismissRestrictedAppScreen()
+            currentTab = AppTab.STUDY
+        }
+        FocusModeActiveScreen(
+            restrictedApp = restrictedAppAttempt,
+            mainViewModel = mainViewModel,
+            onReturnToStudy = {
+                mainViewModel.dismissRestrictedAppScreen()
+                currentTab = AppTab.STUDY
+            },
+            onViewAllowedApps = {
+                mainViewModel.dismissRestrictedAppScreen()
+                currentTab = AppTab.PROFILE
+            }
+        )
+    } else if (showGoalsScreen) {
         BackHandler {
             showGoalsScreen = false
         }

@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -32,7 +33,6 @@ import com.example.R
 import com.example.data.model.UserEntity
 import com.example.data.repository.AppRepository
 import com.example.data.util.UserStudyStats
-import com.example.ui.components.GoogleAccountPickerDialog
 import com.example.ui.components.QRCodeDialog
 import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.IndigoPrimary
@@ -69,12 +69,43 @@ fun ProfileScreen(
 
     var editFullName by remember { mutableStateOf(user.fullName) }
     var editUsername by remember { mutableStateOf(user.username) }
-    val showGoogleAccountPicker by authViewModel.showGoogleAccountPicker.collectAsState()
+
+    var profileSubScreen by remember { mutableStateOf(ProfileSubScreen.PROFILE) }
+
+    when (profileSubScreen) {
+        ProfileSubScreen.SETTINGS -> {
+            SettingsScreen(
+                user = user,
+                mainViewModel = mainViewModel,
+                onNavigateBack = { profileSubScreen = ProfileSubScreen.PROFILE },
+                onNavigateToAllowApps = { profileSubScreen = ProfileSubScreen.ALLOW_APPS }
+            )
+            return
+        }
+        ProfileSubScreen.ALLOW_APPS -> {
+            AllowAppsScreen(
+                mainViewModel = mainViewModel,
+                onNavigateBack = { profileSubScreen = ProfileSubScreen.SETTINGS }
+            )
+            return
+        }
+        ProfileSubScreen.PROFILE -> {
+            // Render Profile UI below
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("👤 My Profile & Privacy", fontWeight = FontWeight.Bold) },
+                title = { Text("👤 My Profile", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(
+                        onClick = { profileSubScreen = ProfileSubScreen.SETTINGS },
+                        modifier = Modifier.testTag("profile_top_settings_button")
+                    ) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
@@ -320,6 +351,34 @@ fun ProfileScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    // Settings & Allow Apps (Profile -> Settings -> Allow Apps)
+                    TextButton(
+                        onClick = { profileSubScreen = ProfileSubScreen.SETTINGS },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("profile_settings_button")
+                    ) {
+                        Icon(Icons.Filled.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Settings & Allow Apps", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Text(
+                                text = "Focus Mode",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                        Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
                     if (onOpenGoalsScreen != null) {
                         TextButton(
                             onClick = onOpenGoalsScreen,
@@ -347,64 +406,6 @@ fun ProfileScreen(
                         Icon(Icons.Outlined.Edit, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Edit Profile Details", modifier = Modifier.weight(1f))
-                    }
-
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                    // Google Account Status / Switch Button
-                    val isGoogleUser = user.passwordHash == "google_oauth_verified" || user.email.endsWith("@gmail.com")
-                    if (isGoogleUser) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_google_logo),
-                                    contentDescription = null,
-                                    tint = Color.Unspecified,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "Google Account Active",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = user.email,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Icon(
-                                    imageVector = Icons.Filled.Check,
-                                    contentDescription = "Verified",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    } else {
-                        TextButton(
-                            onClick = { authViewModel.loginWithGoogle(context) },
-                            modifier = Modifier.fillMaxWidth().testTag("profile_connect_google_button")
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_google_logo),
-                                contentDescription = null,
-                                tint = Color.Unspecified,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Switch to / Connect Google Account", modifier = Modifier.weight(1f))
-                            Icon(Icons.Filled.ChevronRight, contentDescription = null)
-                        }
                     }
 
                     HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -556,6 +557,56 @@ fun ProfileScreen(
                         contentDescription = null,
                         tint = Color(0xFF94A3B8)
                     )
+                }
+            }
+
+            // Official App Identity Card
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("profile_official_app_card")
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.app_logo_1790222630460),
+                        contentDescription = "Official App Logo",
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Study With Buddy",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = "OFFICIAL",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Version 1.0.0 • Connected & Verified",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
 
@@ -747,15 +798,6 @@ fun ProfileScreen(
                 }
             )
         }
-
-        if (showGoogleAccountPicker) {
-            GoogleAccountPickerDialog(
-                onDismissRequest = { authViewModel.dismissGoogleAccountPicker() },
-                onSelectAccount = { email, name ->
-                    authViewModel.loginWithGoogle(context, selectedEmail = email, selectedName = name)
-                }
-            )
-        }
     }
 }
 
@@ -780,3 +822,10 @@ private fun NotificationToggleRow(
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
+
+enum class ProfileSubScreen {
+    PROFILE,
+    SETTINGS,
+    ALLOW_APPS
+}
+
